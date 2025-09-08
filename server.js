@@ -12,7 +12,7 @@ const PORT = process.env.PORT || 10000;
 app.use(bodyParser.json());
 app.use(express.static("public"));
 
-// Server-side storage (like localStorage)
+// Server-side storage
 const storage = {
   tokenMint: "",
   registry: {},
@@ -24,7 +24,15 @@ const storage = {
   scanning: false,
   latestData: null,
   pollInterval: null,
+  startTime: null,
 };
+
+function getSecondsSinceStart() {
+  if (!storage.startTime) return 0;
+  const now = new Date();
+  const diffMs = now - storage.startTime;
+  return Math.floor(diffMs / 1000);
+}
 
 async function fetchAllTokenAccounts(mintAddress) {
   const mintPublicKey = new PublicKey(mintAddress);
@@ -115,6 +123,94 @@ function analyze(registry, fresh) {
   return changes;
 }
 
+async function analyzeTop50(fresh, initialTop50, initialTop50Amounts, previousTop50, previousTop50MinAmount) {
+  if (!initialTop50 || initialTop50.length === 0) return null;
+
+  // Get current top 50 owners
+  const sorted = fresh.slice().sort((a, b) => b.amount - a.amount);
+  const currentTop50 = sorted.slice(0, 50).map(h => h.owner);
+  const currentTop50Map = new Map(sorted.slice(0, 50).map(h => [h.owner, h.amount]));
+  const currentTop50MinAmount = sorted[49]?.amount || 0;
+
+  // Completely new since last fetch:
+  const newSinceLastFetch = currentTop50.filter(owner => 
+    !previousTop50.has(owner) && 
+    (currentTop50Map.get(owner) > previousTop50MinAmount)
+  );
+
+  // Completely new since first fetch
+  const newSinceFirstFetch = currentTop50.filter(owner => 
+    storage.allTimeNewTop50.has(owner)
+  ).length;
+
+  // Add new holders to persistent set
+  newSinceLastFetch.forEach(owner => {
+    storage.allTimeNewTop50.add(owner);
+  });
+
+  // How many of the original top 50 are still in top 50 now?
+  const stillInTop50 = initialTop50.filter(owner => currentTop50.includes(owner));
+  // How many of the original top 50 are now gone?
+  const goneFromInitialTop50 = initialTop50.filter(owner => !currentTop50.includes(owner));
+  // How many in the current top 50 were not in the original top 50?
+  const newInTop50 = currentTop50.filter(owner => !initialTop50.includes(owner));
+
+  // Calculate sales and purchases from Top 50
+  const top50Sales = {
+    sold100: 0,
+    sold50: 0,
+    sold25: 0,
+  };
+
+  const top50Buys = {
+    bought100: 0,
+    bought50: 0,
+    bought25: 0,
+    bought10: 0,
+  };
+
+  // Check each original top 50 holder
+  for (const owner of initialTop50) {
+    const initialAmount = initialTop50Amounts.get(owner);
+    const currentAmount = currentTop50Map.get(owner) || 0;
+    
+    if (currentAmount === 0) {
+      top50Sales.sold100++;
+    } else {
+      const changePct = ((currentAmount - initialAmount) / initialAmount) * 100;
+      
+      if (changePct <= -50) {
+        top50Sales.sold50++;
+      } else if (changePct <= -25) {
+        top50Sales.sold25++;
+      } else if (changePct >= 100) {
+        top50Buys.bought100++;
+      } else if (changePct >= 50) {
+        top50Buys.bought50++;
+      } else if (changePct >= 25) {
+        top50Buys.bought25++;
+      } else if (changePct >= 10) {
+        top50Buys.bought10++;
+      }
+    }
+  }
+
+  // Update previous top 50 tracking for next run
+  storage.previousTop50 = new Set(currentTop50);
+  storage.previousTop50MinAmount = currentTop50MinAmount;
+
+  return {
+    currentTop50Count: currentTop50.length,
+    stillInTop50Count: stillInTop50.length,
+    goneFromInitialTop50Count: goneFromInitialTop50.length,
+    newInTop50Count: newInTop50.length,
+    completelyNewSinceLastFetch: newSinceLastFetch.length,
+    completelyNewSinceFirstFetch: newSinceFirstFetch,
+    top50Sales,
+    top50Buys,
+  };
+}
+
 async function pollData() {
   if (!storage.tokenMint) return;
   const fresh = await fetchAllTokenAccounts(storage.tokenMint);
@@ -128,13 +224,23 @@ async function pollData() {
   }
 
   const changes = analyze(storage.registry, fresh);
+  const top50Stats = await analyzeTop50(
+    fresh, 
+    storage.initialTop50, 
+    storage.initialTop50Amounts,
+    storage.previousTop50,
+    storage.previousTop50MinAmount
+  );
 
   // Store latest data for client
   storage.latestData = {
     fresh,
     registry: storage.registry,
     changes,
+    top50Stats,
     top50Count: storage.initialTop50.length,
+    timeRunning: getSecondsSinceStart(),
+    startTime: storage.startTime
   };
 }
 
@@ -151,6 +257,7 @@ app.post("/api/start", (req, res) => {
   storage.previousTop50MinAmount = 0;
   storage.allTimeNewTop50 = new Set();
   storage.scanning = true;
+  storage.startTime = new Date();
 
   if (storage.pollInterval) clearInterval(storage.pollInterval);
   storage.pollInterval = setInterval(pollData, 2000);
