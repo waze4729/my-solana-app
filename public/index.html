@@ -4,25 +4,25 @@
 <meta charset="UTF-8">
 <title>Solana Token Holder Scanner</title>
 <style>
-body { font-family: monospace; padding: 20px; }
-button { margin-left: 10px; }
-pre { background: #f4f4f4; padding: 10px; }
+body { font-family: monospace; padding: 20px; background: #f4f4f4; }
+button { margin: 5px; padding: 5px 10px; }
+pre { background: #fff; padding: 10px; border: 1px solid #ccc; max-height: 600px; overflow: auto; }
 </style>
 </head>
 <body>
 <h1>Solana Token Holder Scanner</h1>
 <input id="mintInput" placeholder="Enter token mint" size="60">
-<button onclick="scan()">Scan Now</button>
+<button id="startBtn">Start Scan</button>
+<button id="stopBtn">Stop Scan</button>
 <pre id="output"></pre>
 
 <script>
+let intervalId;
+
 async function scan() {
   const mint = document.getElementById("mintInput").value.trim();
   if (!mint) return alert("Enter a token mint");
-  
   const output = document.getElementById("output");
-  output.textContent = "Scanning...";
-
   try {
     const res = await fetch("/api/scan", {
       method: "POST",
@@ -30,25 +30,22 @@ async function scan() {
       body: JSON.stringify({ mint })
     });
     const data = await res.json();
-    
-    if (data.error) {
-      output.textContent = "Error: " + data.error;
-      return;
-    }
-
-    let text = `Total holders: ${data.totalHolders}\n`;
-    text += `Top 50 holders:\n`;
-    data.top50.forEach((h,i) => text += `${i+1}. ${h.owner} - ${h.amount}\n`);
-    text += "\n---\n";
-    text += `Still in initial top50: ${data.stillInTop50Count}\n`;
-    text += `Gone from initial top50: ${data.goneFromInitialTop50Count}\n`;
-    text += `New in top50: ${data.newInTop50Count}\n`;
-    
-    output.textContent = text;
-  } catch (err) {
-    output.textContent = "Error: " + err.message;
+    if (data.error) output.textContent = "Error: " + data.error;
+    else output.textContent = data.output;
+  } catch(e) {
+    output.textContent = "Error: " + e.message;
   }
 }
+
+document.getElementById("startBtn").addEventListener("click", () => {
+  if(intervalId) clearInterval(intervalId);
+  scan(); // run immediately
+  intervalId = setInterval(scan, 2000);
+});
+
+document.getElementById("stopBtn").addEventListener("click", () => {
+  clearInterval(intervalId);
+});
 </script>
 </body>
 </html>
