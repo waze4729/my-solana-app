@@ -212,36 +212,43 @@ async function analyzeTop50(fresh, initialTop50, initialTop50Amounts, previousTo
 }
 
 async function pollData() {
-  if (!storage.tokenMint) return;
-  const fresh = await fetchAllTokenAccounts(storage.tokenMint);
+  if (!storage.tokenMint || !storage.scanning) return;
+  
+  try {
+    const fresh = await fetchAllTokenAccounts(storage.tokenMint);
 
-  if (!storage.initialTop50) {
-    const sorted = fresh.slice().sort((a, b) => b.amount - a.amount);
-    storage.initialTop50 = sorted.slice(0, 50).map(h => h.owner);
-    sorted.slice(0, 50).forEach(h => storage.initialTop50Amounts.set(h.owner, h.amount));
-    storage.previousTop50 = new Set(storage.initialTop50);
-    storage.previousTop50MinAmount = sorted[49]?.amount || 0;
+    if (!storage.initialTop50) {
+      const sorted = fresh.slice().sort((a, b) => b.amount - a.amount);
+      storage.initialTop50 = sorted.slice(0, 50).map(h => h.owner);
+      sorted.slice(0, 50).forEach(h => storage.initialTop50Amounts.set(h.owner, h.amount));
+      storage.previousTop50 = new Set(storage.initialTop50);
+      storage.previousTop50MinAmount = sorted[49]?.amount || 0;
+    }
+
+    const changes = analyze(storage.registry, fresh);
+    const top50Stats = await analyzeTop50(
+      fresh, 
+      storage.initialTop50, 
+      storage.initialTop50Amounts,
+      storage.previousTop50,
+      storage.previousTop50MinAmount
+    );
+
+    // Store latest data for client
+    storage.latestData = {
+      fresh,
+      registry: storage.registry,
+      changes,
+      top50Stats,
+      top50Count: storage.initialTop50.length,
+      timeRunning: getSecondsSinceStart(),
+      startTime: storage.startTime
+    };
+    
+    console.log(`Scan completed at ${new Date().toLocaleTimeString()} - ${changes.current} holders`);
+  } catch (error) {
+    console.error("Error in pollData:", error.message);
   }
-
-  const changes = analyze(storage.registry, fresh);
-  const top50Stats = await analyzeTop50(
-    fresh, 
-    storage.initialTop50, 
-    storage.initialTop50Amounts,
-    storage.previousTop50,
-    storage.previousTop50MinAmount
-  );
-
-  // Store latest data for client
-  storage.latestData = {
-    fresh,
-    registry: storage.registry,
-    changes,
-    top50Stats,
-    top50Count: storage.initialTop50.length,
-    timeRunning: getSecondsSinceStart(),
-    startTime: storage.startTime
-  };
 }
 
 // Start scanning
@@ -260,15 +267,23 @@ app.post("/api/start", (req, res) => {
   storage.startTime = new Date();
 
   if (storage.pollInterval) clearInterval(storage.pollInterval);
-  storage.pollInterval = setInterval(pollData, 2000);
+  
+  // Start polling every 1 second (1000ms)
+  storage.pollInterval = setInterval(pollData, 1000);
+  
+  // Do an immediate scan
+  pollData();
 
-  res.send("Scan started");
+  res.send("Scan started - polling every 1 second");
 });
 
 // Stop scanning
 app.post("/api/stop", (req, res) => {
   storage.scanning = false;
-  if (storage.pollInterval) clearInterval(storage.pollInterval);
+  if (storage.pollInterval) {
+    clearInterval(storage.pollInterval);
+    storage.pollInterval = null;
+  }
   res.send("Scan stopped");
 });
 
@@ -282,4 +297,5 @@ app.get("/api/status", (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  console.log(`Scan interval: 1 second`);
 });
