@@ -17,15 +17,12 @@ pre { background: #f4f4f4; padding: 10px; }
 
 <script>
 async function scan() {
-  // Alert to check button works
-  alert("Scan Now pressed!");
-
   const mint = document.getElementById("mintInput").value.trim();
   if (!mint) return alert("Enter a token mint");
   
   const output = document.getElementById("output");
   output.textContent = "Scanning...";
-  
+
   try {
     const res = await fetch("/api/scan", {
       method: "POST",
@@ -38,11 +35,15 @@ async function scan() {
       output.textContent = "Error: " + data.error;
       return;
     }
+
+    let text = `Total holders: ${data.totalHolders}\n`;
+    text += `Top 50 holders:\n`;
+    data.top50.forEach((h,i) => text += `${i+1}. ${h.owner} - ${h.amount}\n`);
+    text += "\n---\n";
+    text += `Still in initial top50: ${data.stillInTop50Count}\n`;
+    text += `Gone from initial top50: ${data.goneFromInitialTop50Count}\n`;
+    text += `New in top50: ${data.newInTop50Count}\n`;
     
-    let text = `Total holders: ${data.totalHolders}\nTop 50 holders:\n`;
-    data.top50.forEach((h, i) => {
-      text += `${i+1}. ${h.owner} - ${h.amount}\n`;
-    });
     output.textContent = text;
   } catch (err) {
     output.textContent = "Error: " + err.message;
