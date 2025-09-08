@@ -1,14 +1,50 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <title>Solana Holder Scanner</title>
+<meta charset="UTF-8">
+<title>Solana Token Holder Scanner</title>
+<style>
+body { font-family: monospace; padding: 20px; }
+button { margin-left: 10px; }
+pre { background: #f4f4f4; padding: 10px; }
+</style>
 </head>
 <body>
-  <h1>Solana Holder Scanner</h1>
-  <input type="text" id="tokenMint" placeholder="Enter token mint" size="60"/>
-  <button id="scanBtn">Scan Now</button>
-  <pre id="output">Results will appear here...</pre>
-  <script src="app.js"></script>
+<h1>Solana Token Holder Scanner</h1>
+<input id="mintInput" placeholder="Enter token mint" size="60">
+<button onclick="scan()">Scan Now</button>
+<pre id="output"></pre>
+
+<script>
+async function scan() {
+  const mint = document.getElementById("mintInput").value.trim();
+  if (!mint) return alert("Enter a token mint");
+  
+  const output = document.getElementById("output");
+  output.textContent = "Scanning...";
+  
+  try {
+    const res = await fetch("/api/scan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mint })
+    });
+    const data = await res.json();
+    
+    if (data.error) {
+      output.textContent = "Error: " + data.error;
+      return;
+    }
+    
+    let text = `Total holders: ${data.totalHolders}\nTop 50 holders:\n`;
+    data.top50.forEach((h, i) => {
+      text += `${i+1}. ${h.owner} - ${h.amount}\n`;
+    });
+    output.textContent = text;
+  } catch (err) {
+    output.textContent = "Error: " + err.message;
+  }
+}
+</script>
 </body>
 </html>
