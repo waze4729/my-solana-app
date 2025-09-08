@@ -2,13 +2,18 @@ import express from "express";
 import bodyParser from "body-parser";
 import * as solanaWeb3 from "@solana/web3.js";
 
-const { Connection, PublicKey } = solanaWeb3;
+const { PublicKey } = solanaWeb3;
+const connection = new solanaWeb3.Connection(
+  "https://mainnet.helius-rpc.com/?api-key=07ed88b0-3573-4c79-8d62-3a2cbd5c141a",
+  { commitment: "confirmed" }
+);
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
 app.use(bodyParser.json());
 app.use(express.static("public"));
+
 
 const RPC_ENDPOINT = "https://mainnet.helius-rpc.com/?api-key=07ed88b0-3573-4c79-8d62-3a2cbd5c141a";
 const connection = new Connection(RPC_ENDPOINT, { commitment: "confirmed" });
@@ -164,3 +169,4 @@ app.get("/api/status", (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
