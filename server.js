@@ -1,12 +1,9 @@
 import express from "express";
 import bodyParser from "body-parser";
-import * as solanaWeb3 from "@solana/web3.js";
+import { Connection, PublicKey } from "@solana/web3.js";
 
-const { PublicKey } = solanaWeb3;
-const connection = new solanaWeb3.Connection(
-  "https://mainnet.helius-rpc.com/?api-key=07ed88b0-3573-4c79-8d62-3a2cbd5c141a",
-  { commitment: "confirmed" }
-);
+const RPC_ENDPOINT = "https://mainnet.helius-rpc.com/?api-key=07ed88b0-3573-4c79-8d62-3a2cbd5c141a";
+const connection = new Connection(RPC_ENDPOINT, { commitment: "confirmed" });
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -14,6 +11,7 @@ const PORT = process.env.PORT || 10000;
 app.use(bodyParser.json());
 app.use(express.static("public"));
 
+// Server-side storage (like localStorage)
 const storage = {
   tokenMint: "",
   registry: {},
@@ -32,9 +30,19 @@ async function fetchAllTokenAccounts(mintAddress) {
   try {
     const accounts = await connection.getParsedProgramAccounts(
       new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
-      { filters: [{ dataSize: 165 }, { memcmp: { offset: 0, bytes: mintPublicKey.toBase58() } }] }
+      { 
+        filters: [
+          { dataSize: 165 }, 
+          { 
+            memcmp: { 
+              offset: 0, 
+              bytes: mintPublicKey.toBase58() 
+            } 
+          }
+        ] 
+      }
     );
-    return accounts.map(acc => {
+    return accounts.map((acc) => {
       const parsed = acc.account.data.parsed;
       return {
         address: acc.pubkey.toBase58(),
@@ -73,6 +81,7 @@ function analyze(registry, fresh) {
       info.lastSeen = now;
       const changePct = ((freshAmount - info.baseline) / info.baseline) * 100;
       let matched = false;
+
       if (Math.abs(changePct) < 10) changes.unchanged++;
       else if (changePct > 0) {
         for (let pct = 100; pct >= 10; pct -= 10) {
@@ -119,6 +128,7 @@ async function pollData() {
 
   const changes = analyze(storage.registry, fresh);
 
+  // Store latest data for client
   storage.latestData = {
     fresh,
     registry: storage.registry,
@@ -127,6 +137,7 @@ async function pollData() {
   };
 }
 
+// Start scanning
 app.post("/api/start", (req, res) => {
   const { mint } = req.body;
   if (!mint) return res.status(400).send("Missing token mint");
@@ -146,14 +157,19 @@ app.post("/api/start", (req, res) => {
   res.send("Scan started");
 });
 
+// Stop scanning
 app.post("/api/stop", (req, res) => {
   storage.scanning = false;
   if (storage.pollInterval) clearInterval(storage.pollInterval);
   res.send("Scan stopped");
 });
 
+// Status endpoint (client polls this)
 app.get("/api/status", (req, res) => {
-  res.send(storage.latestData || "No data yet");
+  if (!storage.latestData) {
+    return res.json({ message: "No data yet" });
+  }
+  res.json(storage.latestData);
 });
 
 app.listen(PORT, () => {
