@@ -1,6 +1,9 @@
+// server.js
 import express from "express";
 import bodyParser from "body-parser";
-import { Connection, PublicKey } from "@solana/web3.js";
+import solanaWeb3 from "@solana/web3.js";
+
+const { Connection, PublicKey } = solanaWeb3;
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -10,11 +13,7 @@ app.use(express.static("public")); // serve index.html from /public
 
 // ---------- Solana Config ----------
 const RPC_ENDPOINT = "https://mainnet.helius-rpc.com/?api-key=07ed88b0-3573-4c79-8d62-3a2cbd5c141a";
-
-const connection = new Connection(RPC_ENDPOINT, {
-  commitment: "confirmed",
-  disableRetryOnRateLimit: false,
-});
+const connection = new Connection(RPC_ENDPOINT, { commitment: "confirmed" });
 
 // ---------- In-memory State ----------
 let scanning = false;
@@ -27,7 +26,7 @@ let previousTop50MinAmount = 0;
 let allTimeNewTop50 = new Set();
 let pollInterval = null;
 
-// ---------- Helper Functions ----------
+// ---------- Helpers ----------
 async function fetchAllTokenAccounts(mintAddress) {
   const mintPublicKey = new PublicKey(mintAddress);
   const filters = [
@@ -83,9 +82,8 @@ function analyze(registry, fresh) {
       const changePct = ((freshAmount - info.baseline) / info.baseline) * 100;
       let matched = false;
 
-      if (Math.abs(changePct) < 10) {
-        changes.unchanged++;
-      } else if (changePct > 0) {
+      if (Math.abs(changePct) < 10) changes.unchanged++;
+      else if (changePct > 0) {
         for (let pct = 100; pct >= 10; pct -= 10) {
           if (changePct >= pct) {
             changes[`bought${pct}`]++;
@@ -94,7 +92,7 @@ function analyze(registry, fresh) {
           }
         }
         if (!matched) changes.unchanged++;
-      } else if (changePct < 0) {
+      } else {
         for (let pct = 100; pct >= 10; pct -= 10) {
           if (changePct <= -pct) {
             changes[`sold${pct}`]++;
@@ -175,7 +173,7 @@ async function analyzeTop50(fresh) {
 
 // ---------- Scan Loop ----------
 async function pollData() {
-  if (!tokenMint) return;
+  if (!tokenMint) return {};
   try {
     const fresh = await fetchAllTokenAccounts(tokenMint);
 
@@ -197,7 +195,7 @@ async function pollData() {
   }
 }
 
-// ---------- API Endpoints ----------
+// ---------- API ----------
 app.post("/api/start", (req, res) => {
   const { mint } = req.body;
   if (!mint) return res.status(400).json({ error: "Missing token mint" });
@@ -212,10 +210,7 @@ app.post("/api/start", (req, res) => {
   allTimeNewTop50 = new Set();
 
   if (pollInterval) clearInterval(pollInterval);
-  pollInterval = setInterval(async () => {
-    const data = await pollData();
-    if (data.error) console.error(data.error);
-  }, 1000);
+  pollInterval = setInterval(async () => await pollData(), 2000);
 
   res.json({ message: "Scan started" });
 });
@@ -234,5 +229,4 @@ app.get("/api/status", async (req, res) => {
 // ---------- Start Server ----------
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-  console.log(`Visit http://localhost:${PORT}`);
 });
