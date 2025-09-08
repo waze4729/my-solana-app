@@ -4,9 +4,9 @@
 <meta charset="UTF-8">
 <title>Solana Token Holder Scanner</title>
 <style>
-body { font-family: monospace; padding: 20px; background: #f4f4f4; }
-button { margin: 5px; padding: 5px 10px; }
-pre { background: #fff; padding: 10px; border: 1px solid #ccc; max-height: 600px; overflow: auto; }
+body { font-family: monospace; padding: 20px; }
+button { margin-left: 10px; padding: 5px 10px; }
+pre { background: #f4f4f4; padding: 10px; white-space: pre-wrap; }
 </style>
 </head>
 <body>
@@ -17,35 +17,56 @@ pre { background: #fff; padding: 10px; border: 1px solid #ccc; max-height: 600px
 <pre id="output"></pre>
 
 <script>
-let intervalId;
+let interval = null;
 
-async function scan() {
+document.getElementById("startBtn").onclick = async () => {
   const mint = document.getElementById("mintInput").value.trim();
-  if (!mint) return alert("Enter a token mint");
-  const output = document.getElementById("output");
-  try {
-    const res = await fetch("/api/scan", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mint })
-    });
+  if (!mint) return alert("Enter token mint");
+
+  await fetch("/api/start", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ mint })
+  });
+
+  document.getElementById("output").textContent = "Scanning started...\n";
+
+  if (interval) clearInterval(interval);
+  interval = setInterval(async () => {
+    const res = await fetch("/api/status");
     const data = await res.json();
-    if (data.error) output.textContent = "Error: " + data.error;
-    else output.textContent = data.output;
-  } catch(e) {
-    output.textContent = "Error: " + e.message;
-  }
-}
+    if (data.error) {
+      document.getElementById("output").textContent = "Error: " + data.error;
+      return;
+    }
 
-document.getElementById("startBtn").addEventListener("click", () => {
-  if(intervalId) clearInterval(intervalId);
-  scan(); // run immediately
-  intervalId = setInterval(scan, 2000);
-});
+    let text = `Current holders: ${data.changes.current}\nTotal ever tracked: ${data.changes.total}\nUnchanged: ${data.changes.unchanged}\n`;
+    for (let pct=10; pct<=100; pct+=10) text += `Bought >${pct}% more: ${data.changes["bought"+pct]}\n`;
+    for (let pct=10; pct<=100; pct+=10) text += `Sold >${pct}%: ${data.changes["sold"+pct]}\n`;
+    text += `Sold 100% (zeroed): ${data.changes.sold100}\n\n`;
 
-document.getElementById("stopBtn").addEventListener("click", () => {
-  clearInterval(intervalId);
-});
+    if (data.top50Stats) {
+      const t = data.top50Stats;
+      text += "--- Top 50 HOLDERS ---\n";
+      text += `Still in top 50: ${t.stillInTop50Count}\n`;
+      text += `Gone from original top 50: ${t.goneFromInitialTop50Count}\n`;
+      text += `New in top 50: ${t.newInTop50Count}\n`;
+      text += `Completely new since first scan: ${t.completelyNewSinceFirstFetch}\n`;
+      text += "Top50 Sales:\n";
+      text += `Sold100: ${t.top50Sales.sold100}, Sold50: ${t.top50Sales.sold50}, Sold25: ${t.top50Sales.sold25}\n`;
+      text += "Top50 Purchases:\n";
+      text += `Bought100: ${t.top50Buys.bought100}, Bought50: ${t.top50Buys.bought50}, Bought25: ${t.top50Buys.bought25}, Bought10: ${t.top50Buys.bought10}\n`;
+    }
+
+    document.getElementById("output").textContent = text;
+  }, 2000);
+};
+
+document.getElementById("stopBtn").onclick = async () => {
+  if (interval) clearInterval(interval);
+  await fetch("/api/stop", { method: "POST" });
+  document.getElementById("output").textContent += "\nScan stopped.";
+};
 </script>
 </body>
 </html>
