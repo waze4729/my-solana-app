@@ -1,7 +1,8 @@
 // server.js
 import express from "express";
 import bodyParser from "body-parser";
-import solanaWeb3 from "@solana/web3.js";
+import { Connection, PublicKey } from "@solana/web3.js";
+
 
 const { Connection, PublicKey } = solanaWeb3;
 
@@ -230,3 +231,4 @@ app.get("/api/status", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
