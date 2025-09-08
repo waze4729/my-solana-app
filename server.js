@@ -1,7 +1,8 @@
 import express from "express";
 import bodyParser from "body-parser";
-import { Connection, PublicKey } from "@solana/web3.js";
+import solanaWeb3 from "@solana/web3.js";
 
+const { Connection, PublicKey } = solanaWeb3;
 const RPC_ENDPOINT = "https://mainnet.helius-rpc.com/?api-key=07ed88b0-3573-4c79-8d62-3a2cbd5c141a";
 const connection = new Connection(RPC_ENDPOINT, { commitment: "confirmed" });
 
