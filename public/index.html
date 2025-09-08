@@ -1,72 +1,45 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>Solana Token Holder Scanner</title>
-<style>
-body { font-family: monospace; padding: 20px; }
-button { margin-left: 10px; padding: 5px 10px; }
-pre { background: #f4f4f4; padding: 10px; white-space: pre-wrap; }
-</style>
+  <meta charset="UTF-8">
+  <title>Solana Token Scanner</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 30px; }
+    input, button { padding: 8px; margin: 5px; }
+    pre { background: #f4f4f4; padding: 10px; overflow-x: auto; }
+  </style>
 </head>
 <body>
-<h1>Solana Token Holder Scanner</h1>
-<input id="mintInput" placeholder="Enter token mint" size="60">
-<button id="startBtn">Start Scan</button>
-<button id="stopBtn">Stop Scan</button>
-<pre id="output"></pre>
+  <h1>Solana Token Scanner</h1>
+  <input type="text" id="mint" placeholder="Enter token mint" size="50">
+  <button onclick="startScan()">Start Scan</button>
+  <button onclick="stopScan()">Stop Scan</button>
+  <h3>Status / Output:</h3>
+  <pre id="output">Not scanning...</pre>
 
-<script>
-let interval = null;
+  <script>
+    let interval = null;
 
-document.getElementById("startBtn").onclick = async () => {
-  const mint = document.getElementById("mintInput").value.trim();
-  if (!mint) return alert("Enter token mint");
-
-  await fetch("/api/start", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mint })
-  });
-
-  document.getElementById("output").textContent = "Scanning started...\n";
-
-  if (interval) clearInterval(interval);
-  interval = setInterval(async () => {
-    const res = await fetch("/api/status");
-    const data = await res.json();
-    if (data.error) {
-      document.getElementById("output").textContent = "Error: " + data.error;
-      return;
+    async function startScan() {
+      const mint = document.getElementById("mint").value.trim();
+      if (!mint) return alert("Enter a token mint!");
+      await fetch("/api/start", { method: "POST", headers: {"Content-Type":"application/json"}, body: JSON.stringify({ mint }) });
+      document.getElementById("output").textContent = "Scanning...";
+      if (interval) clearInterval(interval);
+      interval = setInterval(fetchStatus, 2000);
     }
 
-    let text = `Current holders: ${data.changes.current}\nTotal ever tracked: ${data.changes.total}\nUnchanged: ${data.changes.unchanged}\n`;
-    for (let pct=10; pct<=100; pct+=10) text += `Bought >${pct}% more: ${data.changes["bought"+pct]}\n`;
-    for (let pct=10; pct<=100; pct+=10) text += `Sold >${pct}%: ${data.changes["sold"+pct]}\n`;
-    text += `Sold 100% (zeroed): ${data.changes.sold100}\n\n`;
-
-    if (data.top50Stats) {
-      const t = data.top50Stats;
-      text += "--- Top 50 HOLDERS ---\n";
-      text += `Still in top 50: ${t.stillInTop50Count}\n`;
-      text += `Gone from original top 50: ${t.goneFromInitialTop50Count}\n`;
-      text += `New in top 50: ${t.newInTop50Count}\n`;
-      text += `Completely new since first scan: ${t.completelyNewSinceFirstFetch}\n`;
-      text += "Top50 Sales:\n";
-      text += `Sold100: ${t.top50Sales.sold100}, Sold50: ${t.top50Sales.sold50}, Sold25: ${t.top50Sales.sold25}\n`;
-      text += "Top50 Purchases:\n";
-      text += `Bought100: ${t.top50Buys.bought100}, Bought50: ${t.top50Buys.bought50}, Bought25: ${t.top50Buys.bought25}, Bought10: ${t.top50Buys.bought10}\n`;
+    async function stopScan() {
+      await fetch("/api/stop", { method: "POST" });
+      document.getElementById("output").textContent = "Scan stopped.";
+      if (interval) clearInterval(interval);
     }
 
-    document.getElementById("output").textContent = text;
-  }, 2000);
-};
-
-document.getElementById("stopBtn").onclick = async () => {
-  if (interval) clearInterval(interval);
-  await fetch("/api/stop", { method: "POST" });
-  document.getElementById("output").textContent += "\nScan stopped.";
-};
-</script>
+    async function fetchStatus() {
+      const res = await fetch("/api/status");
+      const data = await res.json();
+      document.getElementById("output").textContent = JSON.stringify(data, null, 2);
+    }
+  </script>
 </body>
 </html>
