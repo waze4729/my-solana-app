@@ -34,7 +34,7 @@ async function fetchAllTokenAccounts(mintAddress) {
       { filters }
     );
     return accounts
-      .map(acc => {
+      .map((acc) => {
         const parsed = acc.account.data.parsed;
         return {
           address: acc.pubkey.toBase58(),
@@ -42,7 +42,7 @@ async function fetchAllTokenAccounts(mintAddress) {
           amount: Number(parsed.info.tokenAmount.amount) / Math.pow(10, parsed.info.tokenAmount.decimals),
         };
       })
-      .filter(a => a.amount > 0);
+      .filter((a) => a.amount > 0);
   } catch {
     return [];
   }
@@ -63,7 +63,7 @@ function makeStepBuckets() {
 
 function analyze(registry, fresh) {
   const now = Date.now();
-  const freshMap = new Map(fresh.map(h => [h.owner, h.amount]));
+  const freshMap = new Map(fresh.map((h) => [h.owner, h.amount]));
   const changes = makeStepBuckets();
 
   for (const [owner, info] of Object.entries(registry)) {
@@ -115,19 +115,19 @@ function analyze(registry, fresh) {
 
 async function analyzeTop50(fresh) {
   const sorted = fresh.slice().sort((a, b) => b.amount - a.amount);
-  const currentTop50 = sorted.slice(0, 50).map(h => h.owner);
-  const currentTop50Map = new Map(sorted.slice(0, 50).map(h => [h.owner, h.amount]));
+  const currentTop50 = sorted.slice(0, 50).map((h) => h.owner);
+  const currentTop50Map = new Map(sorted.slice(0, 50).map((h) => [h.owner, h.amount]));
   const currentTop50MinAmount = sorted[49]?.amount || 0;
 
   const newSinceLastFetch = currentTop50.filter(
-    owner => !previousTop50.has(owner) && currentTop50Map.get(owner) > previousTop50MinAmount
+    (owner) => !previousTop50.has(owner) && currentTop50Map.get(owner) > previousTop50MinAmount
   );
 
-  newSinceLastFetch.forEach(owner => allTimeNewTop50.add(owner));
+  newSinceLastFetch.forEach((owner) => allTimeNewTop50.add(owner));
 
-  const stillInTop50 = initialTop50.filter(owner => currentTop50.includes(owner));
-  const goneFromInitialTop50 = initialTop50.filter(owner => !currentTop50.includes(owner));
-  const newInTop50 = currentTop50.filter(owner => !initialTop50.includes(owner));
+  const stillInTop50 = initialTop50.filter((owner) => currentTop50.includes(owner));
+  const goneFromInitialTop50 = initialTop50.filter((owner) => !currentTop50.includes(owner));
+  const newInTop50 = currentTop50.filter((owner) => !initialTop50.includes(owner));
 
   const top50Sales = { sold100: 0, sold50: 0, sold25: 0 };
   const top50Buys = { bought100: 0, bought50: 0, bought25: 0, bought10: 0 };
@@ -168,8 +168,8 @@ async function pollData() {
     const fresh = await fetchAllTokenAccounts(tokenMint);
     if (!initialTop50) {
       const sorted = fresh.slice().sort((a, b) => b.amount - a.amount);
-      initialTop50 = sorted.slice(0, 50).map(h => h.owner);
-      sorted.slice(0, 50).forEach(h => initialTop50Amounts.set(h.owner, h.amount));
+      initialTop50 = sorted.slice(0, 50).map((h) => h.owner);
+      sorted.slice(0, 50).forEach((h) => initialTop50Amounts.set(h.owner, h.amount));
       previousTop50 = new Set(initialTop50);
       previousTop50MinAmount = sorted[49]?.amount || 0;
     }
