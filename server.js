@@ -1,13 +1,10 @@
 import express from "express";
 import bodyParser from "body-parser";
+import * as web3 from "@solana/web3.js";
 
-// Use dynamic import for solanaWeb3 to handle the module exports properly
-const solanaWeb3 = await import("@solana/web3.js");
-const Connection = solanaWeb3.Connection;
-const PublicKey = solanaWeb3.PublicKey;
-
+const { Connection, PublicKey } = web3;
 const RPC_ENDPOINT = "https://mainnet.helius-rpc.com/?api-key=07ed88b0-3573-4c79-8d62-3a2cbd5c141a";
-const connection = new Connection(RPC_ENDPOINT, { commitment: "confirmed" });
+const connection = new Connection(RPC_ENDPOINT, "confirmed");
 
 const app = express();
 const PORT = process.env.PORT || 10000;
