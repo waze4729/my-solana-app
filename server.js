@@ -5,7 +5,7 @@ import fetch from "node-fetch";
 
 const { Connection, PublicKey } = web3;
 
-// CONFIG
+// === CONFIG ===
 const RPC_ENDPOINT = "https://mainnet.helius-rpc.com/?api-key=07ed88b0-3573-4c79-8d62-3a2cbd5c141a";
 const JUPITER_API_URL = "https://lite-api.jup.ag/price/v3?ids=";
 const JUPITER_TOKENINFO_URL = "https://lite-api.jup.ag/tokens/v1/token/";
@@ -16,6 +16,8 @@ const JUPITER_BATCH_SIZE = 49;
 const MAX_TOP_HOLDERS = 20;
 const MAX_RETRIES = 4;
 const RETRY_BASE_DELAY = 1800;
+const TOKEN_META_CACHE_TTL_MIN = 200;
+const TOKEN_META_CACHE_TTL_MAX = 300;
 
 const connection = new Connection(RPC_ENDPOINT, "confirmed");
 const app = express();
@@ -42,13 +44,27 @@ const storage = {
     lastUpdated: null
   },
   topHoldersCache: {},
-  tokenMetaCache: {} // mint -> { name, logoURI, symbol }
+  // { [wallet]: { [mint]: { valuableTokens, updatedAt } } }
+  walletTokenCache: {},
+  // { [mint]: { name, logoURI, symbol, updatedAt } }
+  tokenMetaCache: {},
 };
+
+function getRandomTTL() {
+  return (
+    TOKEN_META_CACHE_TTL_MIN +
+    Math.floor(Math.random() * (TOKEN_META_CACHE_TTL_MAX - TOKEN_META_CACHE_TTL_MIN))
+  );
+}
 
 // ----------- Token Info Fetch & Cache using Jupiter API (logo, name, symbol) -----------
 async function fetchTokenMeta(mint) {
   if (!mint) return { name: "Unknown", symbol: "", logoURI: null };
-  if (storage.tokenMetaCache[mint]) return storage.tokenMetaCache[mint];
+  const cached = storage.tokenMetaCache[mint];
+  const now = Date.now();
+  if (cached && now - cached.updatedAt < cached.ttl * 1000) {
+    return cached;
+  }
   try {
     const resp = await fetch(JUPITER_TOKENINFO_URL + mint);
     if (!resp.ok) throw new Error("Jupiter tokeninfo failed");
@@ -56,18 +72,25 @@ async function fetchTokenMeta(mint) {
     const meta = {
       name: data.name || "Unknown",
       symbol: data.symbol || "",
-      logoURI: data.logoURI || null
+      logoURI: data.logoURI || null,
+      updatedAt: now,
+      ttl: getRandomTTL()
     };
     storage.tokenMetaCache[mint] = meta;
     return meta;
   } catch (err) {
-    storage.tokenMetaCache[mint] = { name: "Unknown", symbol: "", logoURI: null };
-    return { name: "Unknown", symbol: "", logoURI: null };
+    storage.tokenMetaCache[mint] = {
+      name: "Unknown",
+      symbol: "",
+      logoURI: null,
+      updatedAt: now,
+      ttl: getRandomTTL()
+    };
+    return storage.tokenMetaCache[mint];
   }
 }
 
 async function fetchTokenMetasParallel(mints) {
-  // Returns: {mint: {name,symbol,logoURI}}
   const out = {};
   await Promise.all(mints.map(async m => {
     out[m] = await fetchTokenMeta(m);
@@ -307,14 +330,32 @@ async function analyzeTop50(fresh, initialTop50, initialTop50Amounts, previousTo
   };
 }
 
-// ----------- Incremental Top Holder Valuable Tokens with New TokenMeta -----------
+// ----------- Incremental Top Holder Valuable Tokens with Wallet+Token Cache -----------
 async function fetchHolderValuableTokens(owner) {
+  const now = Date.now();
+  if (!storage.walletTokenCache[owner]) storage.walletTokenCache[owner] = {};
+  const cache = storage.walletTokenCache[owner];
+
+  // Check for all cached tokens, keep only those not expired
+  const validTokens = [];
+  const toFetch = [];
+  for (const [mint, entry] of Object.entries(cache)) {
+    if (now - entry.updatedAt < entry.ttl * 1000) {
+      validTokens.push(...entry.valuableTokens);
+    } else {
+      // expired, should refetch if still present
+      delete cache[mint];
+    }
+  }
+
+  // Fetch token accounts for this holder
+  let tokens;
   try {
     const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
       new PublicKey(owner),
       { programId: new PublicKey(TOKEN_PROGRAM_ID) }
     );
-    const tokens = tokenAccounts.value.map(acc => {
+    tokens = tokenAccounts.value.map(acc => {
       const parsed = acc.account.data.parsed;
       const info = parsed.info;
       const mint = info.mint;
@@ -322,30 +363,53 @@ async function fetchHolderValuableTokens(owner) {
       const amount = Number(info.tokenAmount.amount) / Math.pow(10, decimals);
       return { mint, amount };
     }).filter(t => t.amount > 0);
-    if (tokens.length === 0) return [];
-
-    const uniqueMints = [...new Set(tokens.map(t => t.mint))];
-    const prices = await fetchJupiterPricesBatched(uniqueMints, JUPITER_BATCH_SIZE);
-    const tokenMetas = await fetchTokenMetasParallel(uniqueMints);
-
-    return tokens
-      .map(t => {
-        const price = prices[t.mint]?.usdPrice;
-        if (!price) return null;
-        const tokenMeta = tokenMetas[t.mint];
-        return {
-          name: tokenMeta?.name || "Unknown",
-          symbol: tokenMeta?.symbol || "",
-          logoURI: tokenMeta?.logoURI || null,
-          usdValue: t.amount * price
-        };
-      })
-      .filter(t => t && t.usdValue > 37)
-      .sort((a, b) => b.usdValue - a.usdValue);
   } catch (e) {
     logError("fetchHolderValuableTokens:", e.message || e);
-    return [];
+    return validTokens.sort((a, b) => b.usdValue - a.usdValue);
   }
+  // For each token, check cache per mint
+  const uniqueMints = [...new Set(tokens.map(t => t.mint))];
+  for (const mint of uniqueMints) {
+    const entry = cache[mint];
+    if (!entry || now - entry.updatedAt > entry.ttl * 1000) {
+      toFetch.push(mint);
+    }
+  }
+  // Fetch prices and meta for tokens not cached
+  let prices = {};
+  let tokenMetas = {};
+  if (toFetch.length) {
+    prices = await fetchJupiterPricesBatched(toFetch, JUPITER_BATCH_SIZE);
+    tokenMetas = await fetchTokenMetasParallel(toFetch);
+  }
+
+  // Update cache
+  for (const t of tokens) {
+    if (!toFetch.includes(t.mint)) continue;
+    const price = prices[t.mint]?.usdPrice;
+    if (!price) continue;
+    const meta = tokenMetas[t.mint] || { name: "Unknown", symbol: "", logoURI: null };
+    const usdValue = t.amount * price;
+    if (usdValue > 37) {
+      cache[t.mint] = {
+        valuableTokens: [{
+          name: meta.name,
+          symbol: meta.symbol,
+          logoURI: meta.logoURI,
+          usdValue,
+        }],
+        updatedAt: now,
+        ttl: getRandomTTL()
+      };
+    }
+  }
+
+  // Combine all valid tokens (cached and new)
+  const allTokens = [];
+  for (const [mint, entry] of Object.entries(cache)) {
+    allTokens.push(...entry.valuableTokens);
+  }
+  return allTokens.sort((a, b) => b.usdValue - a.usdValue);
 }
 
 // ------------- Poll Data - Incremental Top Holder Valuable Tokens -------------
@@ -370,7 +434,6 @@ async function pollData() {
       storage.previousTop50MinAmount
     );
 
-    // Only top 20 holders, incremental valuableTokens fetch and cache
     const topHoldersRaw = [...fresh].sort((a, b) => b.amount - a.amount).slice(0, MAX_TOP_HOLDERS);
     const nowCache = {};
 
@@ -382,9 +445,11 @@ async function pollData() {
         nowCache[holder.owner] = cached;
         continue;
       }
-      const holderData = { ...holder, valuableTokens: cached?.valuableTokens || [] };
+      // get from walletTokenCache, don't refetch immediately, only if missing or expired (done in fetchHolderValuableTokens)
+      const holderData = { ...holder, valuableTokens: storage.walletTokenCache[holder.owner] ? Object.values(storage.walletTokenCache[holder.owner]).flatMap(e => e.valuableTokens || []) : [] };
       topHolders.push(holderData);
       nowCache[holder.owner] = holderData;
+      // In background, refresh valuableTokens if needed (expired or missing)
       fetchHolderValuableTokens(holder.owner).then(tokens => {
         holderData.valuableTokens = tokens;
         nowCache[holder.owner] = holderData;
@@ -430,6 +495,7 @@ app.post("/api/start", async (req, res) => {
   storage.scanning = true;
   storage.startTime = new Date();
   storage.topHoldersCache = {};
+  // Don't clear walletTokenCache: keep as much as possible for performance!
   if (storage.pollInterval) clearInterval(storage.pollInterval);
   await fetchPrices();
   storage.pollInterval = setInterval(pollData, 1000);
@@ -449,7 +515,6 @@ app.post("/api/stop", (req, res) => {
 
 app.get("/api/status", (req, res) => {
   if (!storage.latestData) {
-    // For price-only polling, serve at least prices if available
     return res.json({
       message: "No data yet",
       prices: storage.prices,
