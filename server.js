@@ -7,17 +7,17 @@ const { Connection, PublicKey } = web3;
 const RPC_ENDPOINT = "https://mainnet.helius-rpc.com/?api-key=07ed88b0-3573-4c79-8d62-3a2cbd5c141a";
 const JUPITER_API_URL_V3 = "https://lite-api.jup.ag/price/v3?ids=";
 const JUPITER_API_URL_V2 = "https://lite-api.jup.ag/price/v2?ids=";
-const JUPITER_TOKENINFO_URL = "https://lite-api.jup.ag/tokens/v1/token/";
+const JUPITER_TOKENINFO_URL = "https://lite-api.jup.ag/tokens/v1/";
 const TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const JUP_MINT = "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN";
-const JUPITER_BATCH_SIZE = 49;
-const MAX_TOP_HOLDERS = 50;
+const JUPITER_BATCH_SIZE = 100; // Increased batch size for Jupiter API
+const MAX_TOP_HOLDERS = 20;
 const MAX_RETRIES = 2;
 const RETRY_BASE_DELAY = 1200;
-const TOKEN_META_CACHE_TTL_MIN = 18;
+const TOKEN_META_CACHE_TTL_MIN = 180;
 const TOKEN_META_CACHE_TTL_MAX = 320;
-const SPL_SCAN_INTERVAL = 1000;
+const SPL_SCAN_INTERVAL = 6000;
 
 const connection = new Connection(RPC_ENDPOINT, "confirmed");
 const app = express();
@@ -54,30 +54,111 @@ function getRandomTTL() {
   return TOKEN_META_CACHE_TTL_MIN + Math.floor(Math.random() * (TOKEN_META_CACHE_TTL_MAX - TOKEN_META_CACHE_TTL_MIN));
 }
 
-async function fetchTokenMeta(mint) {
-  if (!mint) return { name: "Unknown", symbol: "", logoURI: null };
-  const cached = storage.tokenMetaCache[mint];
+async function fetchTokenMetasBatch(mints) {
   const now = Date.now();
-  if (cached && now - cached.updatedAt < cached.ttl * 1000) {
-    return cached;
+  const mintsToFetch = [];
+  const results = {};
+  
+  // Check cache first
+  for (const mint of mints) {
+    const cached = storage.tokenMetaCache[mint];
+    if (cached && now - cached.updatedAt < cached.ttl * 1000) {
+      results[mint] = cached;
+    } else {
+      mintsToFetch.push(mint);
+    }
   }
-  try {
-    const resp = await fetch(JUPITER_TOKENINFO_URL + mint);
-    if (!resp.ok) throw new Error("Jupiter tokeninfo failed");
-    const data = await resp.json();
-    const meta = { name: data.name || "Unknown", symbol: data.symbol || "", logoURI: data.logoURI || null, updatedAt: now, ttl: getRandomTTL() };
-    storage.tokenMetaCache[mint] = meta;
-    return meta;
-  } catch (err) {
-    storage.tokenMetaCache[mint] = { name: "Unknown", symbol: "", logoURI: null, updatedAt: now, ttl: getRandomTTL() };
-    return storage.tokenMetaCache[mint];
+  
+  // Fetch remaining mints in batches
+  if (mintsToFetch.length > 0) {
+    try {
+      const response = await fetch(JUPITER_TOKENINFO_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ mints: mintsToFetch })
+      });
+      
+      if (response.ok) {
+        const data = await response.json();
+        
+        for (const mint of mintsToFetch) {
+          const tokenData = data[mint] || {};
+          const meta = { 
+            name: tokenData.name || "Unknown", 
+            symbol: tokenData.symbol || "", 
+            logoURI: tokenData.logoURI || null, 
+            updatedAt: now, 
+            ttl: getRandomTTL() 
+          };
+          
+          storage.tokenMetaCache[mint] = meta;
+          results[mint] = meta;
+        }
+      } else {
+        // If batch request fails, fall back to individual requests
+        for (const mint of mintsToFetch) {
+          try {
+            const resp = await fetch(JUPITER_TOKENINFO_URL + mint);
+            if (resp.ok) {
+              const data = await resp.json();
+              const meta = { 
+                name: data.name || "Unknown", 
+                symbol: data.symbol || "", 
+                logoURI: data.logoURI || null, 
+                updatedAt: now, 
+                ttl: getRandomTTL() 
+              };
+              storage.tokenMetaCache[mint] = meta;
+              results[mint] = meta;
+            } else {
+              // Create default entry if fetch fails
+              const meta = { name: "Unknown", symbol: "", logoURI: null, updatedAt: now, ttl: getRandomTTL() };
+              storage.tokenMetaCache[mint] = meta;
+              results[mint] = meta;
+            }
+          } catch (err) {
+            const meta = { name: "Unknown", symbol: "", logoURI: null, updatedAt: now, ttl: getRandomTTL() };
+            storage.tokenMetaCache[mint] = meta;
+            results[mint] = meta;
+          }
+          await sleep(50); // Small delay between individual requests
+        }
+      }
+    } catch (err) {
+      // If batch request fails entirely, fall back to individual requests
+      for (const mint of mintsToFetch) {
+        try {
+          const resp = await fetch(JUPITER_TOKENINFO_URL + mint);
+          if (resp.ok) {
+            const data = await resp.json();
+            const meta = { 
+              name: data.name || "Unknown", 
+              symbol: data.symbol || "", 
+              logoURI: data.logoURI || null, 
+              updatedAt: now, 
+              ttl: getRandomTTL() 
+            };
+            storage.tokenMetaCache[mint] = meta;
+            results[mint] = meta;
+          } else {
+            // Create default entry if fetch fails
+            const meta = { name: "Unknown", symbol: "", logoURI: null, updatedAt: now, ttl: getRandomTTL() };
+            storage.tokenMetaCache[mint] = meta;
+            results[mint] = meta;
+          }
+        } catch (err) {
+          const meta = { name: "Unknown", symbol: "", logoURI: null, updatedAt: now, ttl: getRandomTTL() };
+          storage.tokenMetaCache[mint] = meta;
+          results[mint] = meta;
+        }
+        await sleep(50); // Small delay between individual requests
+      }
+    }
   }
-}
-
-async function fetchTokenMetasParallel(mints) {
-  const out = {};
-  await Promise.all(mints.map(async m => { out[m] = await fetchTokenMeta(m); }));
-  return out;
+  
+  return results;
 }
 
 function getSecondsSinceStart() {
@@ -407,57 +488,82 @@ async function fetchHolderValuableTokens(owner) {
   return validTokens.sort((a, b) => b.usdValue - a.usdValue);
 }
 
-async function updateHolderValuableTokens(owner) {
-  const now = Date.now();
-  if (!storage.walletTokenCache[owner]) storage.walletTokenCache[owner] = {};
-  const cache = storage.walletTokenCache[owner];
-  let tokens;
+async function updateAllHoldersValuableTokens(owners) {
+  if (!owners || owners.length === 0) return;
   
-  try {
-    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
-      new PublicKey(owner),
-      { programId: new PublicKey(TOKEN_PROGRAM_ID) }
-    );
+  // Get all tokens from all holders
+  const allTokens = [];
+  const ownerTokenMap = new Map();
+  
+  for (const owner of owners) {
+    try {
+      const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+        new PublicKey(owner),
+        { programId: new PublicKey(TOKEN_PROGRAM_ID) }
+      );
+      
+      const tokens = tokenAccounts.value.map(acc => {
+        const parsed = acc.account.data.parsed;
+        const info = parsed.info;
+        const mint = info.mint;
+        const decimals = info.tokenAmount.decimals;
+        const amount = Number(info.tokenAmount.amount) / Math.pow(10, decimals);
+        return { owner, mint, amount };
+      }).filter(t => t.amount > 0);
+      
+      allTokens.push(...tokens);
+      
+      // Initialize owner token map
+      if (!ownerTokenMap.has(owner)) {
+        ownerTokenMap.set(owner, []);
+      }
+      ownerTokenMap.get(owner).push(...tokens);
+    } catch (e) {
+      logError(`Error fetching tokens for owner ${owner}:`, e.message);
+    }
     
-    tokens = tokenAccounts.value.map(acc => {
-      const parsed = acc.account.data.parsed;
-      const info = parsed.info;
-      const mint = info.mint;
-      const decimals = info.tokenAmount.decimals;
-      const amount = Number(info.tokenAmount.amount) / Math.pow(10, decimals);
-      return { mint, amount };
-    }).filter(t => t.amount > 0);
-  } catch (e) {
-    return;
+    // Add a small delay to avoid rate limiting
+    await sleep(50);
   }
   
-  const uniqueMints = [...new Set(tokens.map(t => t.mint))];
+  // Get all unique mints
+  const uniqueMints = [...new Set(allTokens.map(t => t.mint))];
+  
+  // Batch fetch prices and metadata
   let prices = {};
   let tokenMetas = {};
   
-  if (uniqueMints.length) {
+  if (uniqueMints.length > 0) {
     prices = await fetchJupiterPricesBatched(uniqueMints, JUPITER_BATCH_SIZE);
-    tokenMetas = await fetchTokenMetasParallel(uniqueMints);
+    tokenMetas = await fetchTokenMetasBatch(uniqueMints);
   }
   
-  for (const t of tokens) {
-    const price = prices[t.mint]?.usdPrice;
-    if (!price) continue;
+  const now = Date.now();
+  
+  // Update cache for each owner
+  for (const [owner, tokens] of ownerTokenMap.entries()) {
+    if (!storage.walletTokenCache[owner]) storage.walletTokenCache[owner] = {};
+    const cache = storage.walletTokenCache[owner];
     
-    const meta = tokenMetas[t.mint] || { name: "Unknown", symbol: "", logoURI: null };
-    const usdValue = t.amount * price;
-    
-    if (usdValue > 500) {
-      cache[t.mint] = {
-        valuableTokens: [{
-          name: meta.name,
-          symbol: meta.symbol,
-          logoURI: meta.logoURI,
-          usdValue,
-        }],
-        updatedAt: now,
-        ttl: getRandomTTL()
-      };
+    for (const token of tokens) {
+      const price = prices[token.mint]?.usdPrice;
+      if (!price) continue;
+      
+      const meta = tokenMetas[token.mint] || { name: "Unknown", symbol: "", logoURI: null };
+      const usdValue = token.amount * price;
+      
+      if (usdValue > 500) {
+        cache[token.mint] = {
+          valuableTokens: [{
+            name: meta.name,
+            symbol: meta.symbol,
+            logoURI: meta.logoURI,
+            usdValue,
+          }],
+          updatedAt: now,
+          ttl: getRandomTTL()
+        };
+      }
     }
   }
 }
@@ -528,10 +634,8 @@ async function pollData() {
 async function pollTopHolderSplTokens() {
   if (!storage.tokenMint || !storage.scanning || !storage.topHolderAddresses.length) return;
   
-  for (const owner of storage.topHolderAddresses) {
-    await updateHolderValuableTokens(owner);
-    await sleep(350);
-  }
+  // Batch update all holders' tokens at once
+  await updateAllHoldersValuableTokens(storage.topHolderAddresses);
 }
 
 app.post("/api/start", async (req, res) => {
@@ -599,4 +703,3 @@ app.get("/api/status", (req, res) => {
 app.listen(PORT, () => {
   logInfo(`Server running on port ${PORT}`);
 });
-
