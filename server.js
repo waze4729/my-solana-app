@@ -325,11 +325,15 @@ app.post("/api/stop", (req, res) => {
   res.send("Scan stopped");
 });
 
-// Status endpoint (client polls this)
 app.get("/api/status", (req, res) => {
   if (!storage.latestData) {
     return res.json({ message: "No data yet" });
   }
+  // Ensure latestData includes live price info for the current token
+  storage.latestData.tokenMint = storage.tokenMint;
+  storage.latestData.currentTokenPrice = storage.prices[storage.tokenMint] || 0;
+  storage.latestData.solPrice = storage.prices["So11111111111111111111111111111111111111112"] || 0;
+  storage.latestData.jupPrice = storage.prices["JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"] || 0;
   res.json(storage.latestData);
 });
 
@@ -337,5 +341,6 @@ app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Scan interval: 1 second`);
 });
+
 
 
