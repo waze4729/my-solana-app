@@ -1,6 +1,7 @@
 import express from "express";
 import bodyParser from "body-parser";
 import * as web3 from "@solana/web3.js";
+import fetch from "node-fetch";
 
 const { Connection, PublicKey } = web3;
 const RPC_ENDPOINT = "https://mainnet.helius-rpc.com/?api-key=07ed88b0-3573-4c79-8d62-3a2cbd5c141a";
@@ -25,6 +26,11 @@ const storage = {
   latestData: null,
   pollInterval: null,
   startTime: null,
+  prices: {
+    SOL: 0,
+    JUP: 0,
+    lastUpdated: null
+  }
 };
 
 function getSecondsSinceStart() {
@@ -32,6 +38,34 @@ function getSecondsSinceStart() {
   const now = new Date();
   const diffMs = now - storage.startTime;
   return Math.floor(diffMs / 1000);
+}
+
+// Fetch prices from Jupiter API
+async function fetchPrices() {
+  try {
+    const response = await fetch('https://api.jup.ag/price/v2?ids=JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN,So11111111111111111111111111111111111111112');
+    const data = await response.json();
+    
+    if (data && data.data) {
+      storage.prices.SOL = parseFloat(data.data['So11111111111111111111111111111111111111112']?.price || 0);
+      storage.prices.JUP = parseFloat(data.data['JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN']?.price || 0);
+      storage.prices.lastUpdated = new Date();
+      console.log(`Prices updated - SOL: $${storage.prices.SOL}, JUP: $${storage.prices.JUP}`);
+    }
+  } catch (error) {
+    console.error('Error fetching prices:', error.message);
+  }
+}
+
+// Calculate USD value based on token mint
+function calculateUSDValue(amount, tokenMint) {
+  if (tokenMint === 'So11111111111111111111111111111111111111112') {
+    return amount * storage.prices.SOL;
+  } else if (tokenMint === 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN') {
+    return amount * storage.prices.JUP;
+  }
+  // For other tokens, we don't have price data yet
+  return 0;
 }
 
 async function fetchAllTokenAccounts(mintAddress) {
@@ -53,10 +87,12 @@ async function fetchAllTokenAccounts(mintAddress) {
     );
     return accounts.map((acc) => {
       const parsed = acc.account.data.parsed;
+      const amount = Number(parsed.info.tokenAmount.amount) / Math.pow(10, parsed.info.tokenAmount.decimals);
       return {
         address: acc.pubkey.toBase58(),
         owner: parsed.info.owner,
-        amount: Number(parsed.info.tokenAmount.amount) / Math.pow(10, parsed.info.tokenAmount.decimals),
+        amount: amount,
+        usdValue: calculateUSDValue(amount, mintAddress)
       };
     }).filter(a => a.amount > 0);
   } catch (e) {
@@ -242,7 +278,9 @@ async function pollData() {
       top50Stats,
       top50Count: storage.initialTop50.length,
       timeRunning: getSecondsSinceStart(),
-      startTime: storage.startTime
+      startTime: storage.startTime,
+      prices: storage.prices,
+      tokenMint: storage.tokenMint
     };
     
     console.log(`Scan completed at ${new Date().toLocaleTimeString()} - ${changes.current} holders`);
@@ -252,7 +290,7 @@ async function pollData() {
 }
 
 // Start scanning
-app.post("/api/start", (req, res) => {
+app.post("/api/start", async (req, res) => {
   const { mint } = req.body;
   if (!mint) return res.status(400).send("Missing token mint");
 
@@ -268,8 +306,14 @@ app.post("/api/start", (req, res) => {
 
   if (storage.pollInterval) clearInterval(storage.pollInterval);
   
+  // Fetch prices immediately
+  await fetchPrices();
+  
   // Start polling every 1 second (1000ms)
   storage.pollInterval = setInterval(pollData, 1000);
+  
+  // Update prices every 30 seconds
+  setInterval(fetchPrices, 30000);
   
   // Do an immediate scan
   pollData();
