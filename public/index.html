@@ -264,14 +264,12 @@
       font-weight: 600;
       color: var(--accent);
       margin-right: 5px;
-      font-size: 14px;
     }
     .other-tokens-label {
       font-weight: 600;
       color: var(--gray-light);
       margin-right: 6px;
       margin-left: 8px;
-      font-size: 13px;
     }
     .holder-address {
       font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--gray);
@@ -431,17 +429,14 @@
         })
         .catch(() => {});
     }
-    
     function startScan() {
       const mint = document.getElementById('mint').value.trim();
       if (!mint) { alert('Please enter a token mint address'); return; }
-      
       document.getElementById('startBtn').disabled = true;
       document.getElementById('stopBtn').disabled = false;
       document.getElementById('status').textContent = 'Starting scan...';
       document.getElementById('status').className = 'status scanning';
       document.getElementById('currentToken').textContent = mint.substring(0, 8) + '...' + mint.substring(mint.length - 6);
-      
       fetch('/api/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -453,7 +448,6 @@
         startTime = new Date();
         isScanning = true;
         updateTimeRunning();
-        
         if (scanInterval) clearInterval(scanInterval);
         scanInterval = setInterval(fetchStatus, 1000);
         fetchStatus();
@@ -465,7 +459,6 @@
         document.getElementById('stopBtn').disabled = true;
       });
     }
-    
     function stopScan() {
       fetch('/api/stop', { method: 'POST' })
       .then(response => response.text())
@@ -475,14 +468,12 @@
         document.getElementById('startBtn').disabled = false;
         document.getElementById('stopBtn').disabled = true;
         isScanning = false;
-        
         if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
       })
       .catch(error => {
         document.getElementById('status').textContent = 'Error stopping scan';
       });
     }
-    
     function updateTimeRunning() {
       if (!startTime) return;
       const now = new Date();
@@ -491,46 +482,36 @@
       const hours = Math.floor(diffSec / 3600);
       const minutes = Math.floor((diffSec % 3600) / 60);
       const seconds = diffSec % 60;
-      
       document.getElementById('timeRunning').textContent = 
         `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
     }
-    
     function updatePrices(prices, tokenMintOverride) {
       const tokenMint = tokenMintOverride || lastPrices.tokenMint;
       let symbol = "Token";
-      
       if (tokenMint === "So11111111111111111111111111111111111111112") symbol = "SOL";
       else if (tokenMint === "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN") symbol = "JUP";
       else if (tokenMint) symbol = tokenMint.substring(0, 4) + "..." + tokenMint.substring(tokenMint.length - 4);
-      
       document.getElementById('tokenSymbol').textContent = symbol + ":";
       document.getElementById('tokenPrice').textContent = prices[tokenMint] ? `${Number(prices[tokenMint]).toFixed(4)}$` : "0.00$";
       document.getElementById('solPrice').textContent = prices["So11111111111111111111111111111111111111112"] ? `${Number(prices["So11111111111111111111111111111111111111112"]).toFixed(2)}$` : "0.00$";
       document.getElementById('jupPrice').textContent = prices["JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"] ? `${Number(prices["JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"]).toFixed(4)}$` : "0.0000$";
-      
       if (prices.lastUpdated) {
         const lastUpdated = new Date(prices.lastUpdated);
         document.getElementById('priceUpdated').textContent = timeAgo(lastUpdated);
       }
-      
       lastPrices = { ...lastPrices, ...prices, tokenMint };
     }
-    
     function timeAgo(date) {
       const now = new Date();
       const diff = Math.floor((now - date) / 1000);
-      
       if (diff < 5) return "just now";
       if (diff < 60) return `${diff} seconds ago`;
       if (diff < 3600) return `${Math.floor(diff/60)} minutes ago`;
       if (diff < 86400) return `${Math.floor(diff/3600)} hours ago`;
       return date.toLocaleString();
     }
-    
     function fetchStatus() {
       if (!isScanning) return;
-      
       fetch('/api/status')
         .then(response => {
           if (!response.ok) throw new Error('Network response was not ok');
@@ -541,37 +522,29 @@
             document.getElementById('status').textContent = data.message;
             return;
           }
-          
           updateDisplay(data);
         })
         .catch(error => {
           if (isScanning) document.getElementById('status').textContent = 'Connection lost - Reconnecting...';
         });
     }
-    
     function scanToken(mint) {
       document.getElementById('mint').value = mint;
       document.getElementById('mint').placeholder = mint;
       startScan();
     }
-    
     function updateDisplay(data) {
       if (data.prices) updatePrices(data.prices, data.tokenMint);
-      
       if (data.startTime) {
         startTime = new Date(data.startTime);
         document.getElementById('startedAt').textContent = startTime.toLocaleString();
       }
-      
       updateTimeRunning();
-      
       document.getElementById('currentHolders').textContent = data.changes.current.toLocaleString();
       document.getElementById('totalTracked').textContent = data.changes.total.toLocaleString();
       document.getElementById('unchanged').textContent = data.changes.unchanged.toLocaleString();
-      
       const purchasesContainer = document.getElementById('purchases');
       purchasesContainer.innerHTML = '';
-      
       for (let pct = 10; pct <= 100; pct += 10) {
         const purchaseItem = document.createElement('div');
         purchaseItem.className = 'stat-item';
@@ -581,10 +554,8 @@
         `;
         purchasesContainer.appendChild(purchaseItem);
       }
-      
       const salesContainer = document.getElementById('sales');
       salesContainer.innerHTML = '';
-      
       for (let pct = 10; pct <= 100; pct += 10) {
         const saleItem = document.createElement('div');
         saleItem.className = 'stat-item';
@@ -594,7 +565,6 @@
         `;
         salesContainer.appendChild(saleItem);
       }
-      
       const sold100Item = document.createElement('div');
       sold100Item.className = 'stat-item';
       sold100Item.innerHTML = `
@@ -602,7 +572,6 @@
         <span class="stat-value negative">${data.changes.sold100}</span>
       `;
       salesContainer.appendChild(sold100Item);
-      
       const top50Container = document.getElementById('top50Stats');
       if (data.top50Stats) {
         top50Container.innerHTML = `
@@ -626,22 +595,17 @@
       } else {
         top50Container.innerHTML = '<div class="loading">Building top 50 baseline</div>';
       }
-      
       const topHoldersContainer = document.getElementById('topHolders');
       topHoldersContainer.innerHTML = '';
-      
       if (data.topHolders && data.topHolders.length > 0) {
         data.topHolders.forEach((holder, index) => {
           const holderItem = document.createElement('div');
           holderItem.className = `holder-item ${index < 3 ? 'top-3' : ''}`;
-          
           const holderRow = document.createElement('div');
           holderRow.className = 'holder-row holder-row-main';
-          
           const rankBadge = document.createElement('div');
           rankBadge.className = 'rank-badge';
           rankBadge.textContent = index + 1;
-          
           const shortAddress = holder.owner.substring(0, 6) + '...' + holder.owner.substring(holder.owner.length - 4);
           const addressLink = document.createElement('a');
           addressLink.className = 'holder-address';
@@ -650,20 +614,16 @@
           addressLink.rel = 'noopener noreferrer';
           addressLink.title = holder.owner;
           addressLink.textContent = shortAddress;
-          
           const amountLabel = document.createElement('span');
           amountLabel.className = 'holder-label';
           amountLabel.textContent = "Holding Tokens:";
-          
           const amountSpan = document.createElement('span');
           amountSpan.className = 'holder-amount';
           amountSpan.textContent = formatTokenCount(holder.amount);
-          
           const valueLabel = document.createElement('span');
           valueLabel.className = 'holder-label';
           valueLabel.style.marginLeft = "12px";
           valueLabel.textContent = "Holding Value:";
-          
           const usdSpan = document.createElement('span');
           usdSpan.className = 'holder-usd';
           if (holder.usdValue && holder.usdValue > 0) {
@@ -671,54 +631,42 @@
           } else {
             usdSpan.textContent = 'N/A';
           }
-          
           holderRow.appendChild(rankBadge);
           holderRow.appendChild(addressLink);
           holderRow.appendChild(amountLabel); holderRow.appendChild(amountSpan);
           holderRow.appendChild(valueLabel); holderRow.appendChild(usdSpan);
-          
           holderItem.appendChild(holderRow);
-          
           if (holder.valuableTokens && holder.valuableTokens.length > 0) {
             const tokensRow = document.createElement('div');
             tokensRow.className = 'holder-row-tokens';
-            
             const otherLabel = document.createElement('span');
             otherLabel.className = 'other-tokens-label';
             otherLabel.textContent = "This wallet also holds →";
             tokensRow.appendChild(otherLabel);
-            
             holder.valuableTokens.forEach(token => {
               const tokenItem = document.createElement('div');
               tokenItem.className = 'valuable-token-item';
               tokenItem.title = "Click to scan this token";
               tokenItem.onclick = () => scanToken(token.symbol || token.name);
-              
               const logo = token.logoURI
                 ? `<img src="${token.logoURI}" class="valuable-token-logo" width="22" height="22" alt="${token.name}">`
                 : '';
-                
               tokenItem.innerHTML = `
                 ${logo}
                 <span class="valuable-token-name">${token.name}</span>
                 <span class="valuable-token-value">${formatUSD(token.usdValue, true)}</span>
               `;
-              
               tokensRow.appendChild(tokenItem);
             });
-            
             holderItem.appendChild(tokensRow);
           }
-          
           topHoldersContainer.appendChild(holderItem);
         });
       } else {
         topHoldersContainer.innerHTML = '<div class="loading">Scanning for holders</div>';
       }
-      
       document.getElementById('lastUpdated').textContent = `Last updated: ${new Date().toLocaleTimeString()} • ${data.changes.current} active holders`;
     }
-    
     function formatTokenCount(num) {
       if (num >= 1000000000) return (num / 1000000000).toFixed(2) + 'B';
       else if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M';
@@ -726,14 +674,12 @@
       else if (num >= 1) return num.toFixed(2);
       else return num.toFixed(6);
     }
-    
     function formatUSD(num) {
       if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M$';
       else if (num >= 1000) return (num / 1000).toFixed(1) + 'K$';
       else if (num >= 1) return num.toFixed(2) + '$';
       else return num.toFixed(4) + '$';
     }
-    
     document.addEventListener('DOMContentLoaded', function() {
       document.getElementById('startedAt').textContent = '-';
       document.getElementById('timeRunning').textContent = '-';
@@ -742,7 +688,6 @@
       document.getElementById('unchanged').textContent = '-';
       document.getElementById('pollInterval').textContent = '1 second';
       document.getElementById('currentToken').textContent = 'SOL (example)';
-      
       priceInterval = setInterval(fetchPricesOnly, 5000);
       fetchPricesOnly();
     });
