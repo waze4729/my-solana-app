@@ -40,9 +40,29 @@ const storage = {
     JUP: 0,
     lastUpdated: null
   },
-  topHoldersCache: {} // key: owner, value: { ...holder, valuableTokens }
+  topHoldersCache: {}
 };
 
+// ----------- Load SPL Token List (name & logoURI) -----------
+let SPL_TOKEN_MAP = new Map();
+let SPL_TOKEN_LOGO_MAP = new Map();
+(async () => {
+  try {
+    const resp = await fetch(
+      "https://cdn.jsdelivr.net/gh/solana-labs/token-list@main/src/tokens/solana.tokenlist.json"
+    );
+    const { tokens } = await resp.json();
+    for (const t of tokens) {
+      SPL_TOKEN_MAP.set(t.address, t.name);
+      SPL_TOKEN_LOGO_MAP.set(t.address, t.logoURI);
+    }
+    console.log("Loaded Solana token list, tokens:", SPL_TOKEN_MAP.size);
+  } catch (err) {
+    console.error("Could not load SPL token list:", err);
+  }
+})();
+
+// ------------------ Utility Functions ------------------
 function getSecondsSinceStart() {
   if (!storage.startTime) return 0;
   const now = new Date();
@@ -296,11 +316,12 @@ async function fetchHolderValuableTokens(owner) {
       .map(t => {
         const price = prices[t.mint]?.usdPrice;
         if (!price) return null;
+        const name = SPL_TOKEN_MAP.get(t.mint) || "Unknown";
+        const logoURI = SPL_TOKEN_LOGO_MAP.get(t.mint) || null;
         return {
-          mint: t.mint,
-          amount: t.amount,
-          usdValue: t.amount * price,
-          price: price
+          name,
+          logoURI,
+          usdValue: t.amount * price
         };
       })
       .filter(t => t && t.usdValue > 37)
@@ -335,22 +356,19 @@ async function pollData() {
 
     // Only top 20 holders, incremental valuableTokens fetch and cache
     const topHoldersRaw = [...fresh].sort((a, b) => b.amount - a.amount).slice(0, MAX_TOP_HOLDERS);
-    const nowCache = {}; // for this poll round
+    const nowCache = {};
 
     const topHolders = [];
     for (const holder of topHoldersRaw) {
       let cached = storage.topHoldersCache[holder.owner];
       if (cached && cached.amount === holder.amount) {
-        // Use cached data if no change (including valuableTokens if present)
         topHolders.push(cached);
         nowCache[holder.owner] = cached;
         continue;
       }
-      // Add a partial holder now (will be sent immediately)
       const holderData = { ...holder, valuableTokens: cached?.valuableTokens || [] };
       topHolders.push(holderData);
       nowCache[holder.owner] = holderData;
-      // Fetch valuableTokens in background and update cache when ready
       fetchHolderValuableTokens(holder.owner).then(tokens => {
         holderData.valuableTokens = tokens;
         nowCache[holder.owner] = holderData;
@@ -362,7 +380,6 @@ async function pollData() {
       });
       await sleep(100);
     }
-    // Clean up cache: remove non-top holders to avoid memory leak
     storage.topHoldersCache = nowCache;
 
     storage.latestData = {
