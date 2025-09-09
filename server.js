@@ -44,9 +44,7 @@ const storage = {
     lastUpdated: null
   },
   topHoldersCache: {},
-  // { [wallet]: { [mint]: { valuableTokens, updatedAt } } }
   walletTokenCache: {},
-  // { [mint]: { name, logoURI, symbol, updatedAt } }
   tokenMetaCache: {},
 };
 
@@ -57,7 +55,7 @@ function getRandomTTL() {
   );
 }
 
-// ----------- Token Info Fetch & Cache using Jupiter API (logo, name, symbol) -----------
+// --- Jupiter API SPL Token Info: cache + rate-limit aware ---
 async function fetchTokenMeta(mint) {
   if (!mint) return { name: "Unknown", symbol: "", logoURI: null };
   const cached = storage.tokenMetaCache[mint];
@@ -89,7 +87,6 @@ async function fetchTokenMeta(mint) {
     return storage.tokenMetaCache[mint];
   }
 }
-
 async function fetchTokenMetasParallel(mints) {
   const out = {};
   await Promise.all(mints.map(async m => {
@@ -98,7 +95,7 @@ async function fetchTokenMetasParallel(mints) {
   return out;
 }
 
-// ------------------ Utility Functions ------------------
+// --- Utility ---
 function getSecondsSinceStart() {
   if (!storage.startTime) return 0;
   const now = new Date();
@@ -114,7 +111,7 @@ function logInfo(...args) {
   console.log("==>", ...args);
 }
 
-// ----------- Robust Jupiter Price Fetching -------------
+// --- Robust Jupiter Price Fetching (main scan only, not for wallet tokens!) ---
 async function fetchJupiterPricesBatched(mints, maxBatchSize = JUPITER_BATCH_SIZE) {
   let prices = {};
   for (let i = 0; i < mints.length; i += maxBatchSize) {
@@ -159,7 +156,7 @@ async function fetchJupiterPricesBatched(mints, maxBatchSize = JUPITER_BATCH_SIZ
   return prices;
 }
 
-// ------------- Price Fetching for Global Dashboard -------------
+// --- Price Fetching ONLY for main scan (token, SOL, JUP) ---
 async function fetchPrices() {
   if (!storage.tokenMint) return;
   try {
@@ -211,7 +208,7 @@ async function fetchAllTokenAccounts(mintAddress) {
   }
 }
 
-// ----------------- Analysis Functions ------------------
+// --- Analysis Functions ---
 function makeStepBuckets() {
   const buckets = {};
   for (let pct = 10; pct <= 100; pct += 10) {
@@ -330,25 +327,25 @@ async function analyzeTop50(fresh, initialTop50, initialTop50Amounts, previousTo
   };
 }
 
-// ----------- Incremental Top Holder Valuable Tokens with Wallet+Token Cache -----------
+// --- Top Holder Valuable Tokens (DE-prioritized, cache fetch only, never blocks scan) ---
 async function fetchHolderValuableTokens(owner) {
   const now = Date.now();
   if (!storage.walletTokenCache[owner]) storage.walletTokenCache[owner] = {};
   const cache = storage.walletTokenCache[owner];
-
-  // Check for all cached tokens, keep only those not expired
+  // Only use cache; never fetch new data unless idle (done async after scan)
   const validTokens = [];
-  const toFetch = [];
   for (const [mint, entry] of Object.entries(cache)) {
     if (now - entry.updatedAt < entry.ttl * 1000) {
       validTokens.push(...entry.valuableTokens);
-    } else {
-      // expired, should refetch if still present
-      delete cache[mint];
     }
   }
-
-  // Fetch token accounts for this holder
+  return validTokens.sort((a, b) => b.usdValue - a.usdValue);
+}
+// When idle, call this to update cache (never in scan loop)
+async function updateHolderValuableTokens(owner) {
+  const now = Date.now();
+  if (!storage.walletTokenCache[owner]) storage.walletTokenCache[owner] = {};
+  const cache = storage.walletTokenCache[owner];
   let tokens;
   try {
     const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
@@ -364,28 +361,17 @@ async function fetchHolderValuableTokens(owner) {
       return { mint, amount };
     }).filter(t => t.amount > 0);
   } catch (e) {
-    logError("fetchHolderValuableTokens:", e.message || e);
-    return validTokens.sort((a, b) => b.usdValue - a.usdValue);
+    logError("updateHolderValuableTokens:", e.message || e);
+    return;
   }
-  // For each token, check cache per mint
   const uniqueMints = [...new Set(tokens.map(t => t.mint))];
-  for (const mint of uniqueMints) {
-    const entry = cache[mint];
-    if (!entry || now - entry.updatedAt > entry.ttl * 1000) {
-      toFetch.push(mint);
-    }
-  }
-  // Fetch prices and meta for tokens not cached
   let prices = {};
   let tokenMetas = {};
-  if (toFetch.length) {
-    prices = await fetchJupiterPricesBatched(toFetch, JUPITER_BATCH_SIZE);
-    tokenMetas = await fetchTokenMetasParallel(toFetch);
+  if (uniqueMints.length) {
+    prices = await fetchJupiterPricesBatched(uniqueMints, JUPITER_BATCH_SIZE);
+    tokenMetas = await fetchTokenMetasParallel(uniqueMints);
   }
-
-  // Update cache
   for (const t of tokens) {
-    if (!toFetch.includes(t.mint)) continue;
     const price = prices[t.mint]?.usdPrice;
     if (!price) continue;
     const meta = tokenMetas[t.mint] || { name: "Unknown", symbol: "", logoURI: null };
@@ -403,16 +389,9 @@ async function fetchHolderValuableTokens(owner) {
       };
     }
   }
-
-  // Combine all valid tokens (cached and new)
-  const allTokens = [];
-  for (const [mint, entry] of Object.entries(cache)) {
-    allTokens.push(...entry.valuableTokens);
-  }
-  return allTokens.sort((a, b) => b.usdValue - a.usdValue);
 }
 
-// ------------- Poll Data - Incremental Top Holder Valuable Tokens -------------
+// --- Poll Data: Main scan always prioritized, token holdings only refreshed in background! ---
 async function pollData() {
   if (!storage.tokenMint || !storage.scanning) return;
   try {
@@ -440,26 +419,15 @@ async function pollData() {
     const topHolders = [];
     for (const holder of topHoldersRaw) {
       let cached = storage.topHoldersCache[holder.owner];
+      let valuableTokens;
       if (cached && cached.amount === holder.amount) {
-        topHolders.push(cached);
-        nowCache[holder.owner] = cached;
-        continue;
+        valuableTokens = cached.valuableTokens;
+      } else {
+        valuableTokens = await fetchHolderValuableTokens(holder.owner); // CACHE ONLY, NEVER REFRESH HERE
       }
-      // get from walletTokenCache, don't refetch immediately, only if missing or expired (done in fetchHolderValuableTokens)
-      const holderData = { ...holder, valuableTokens: storage.walletTokenCache[holder.owner] ? Object.values(storage.walletTokenCache[holder.owner]).flatMap(e => e.valuableTokens || []) : [] };
+      const holderData = { ...holder, valuableTokens };
       topHolders.push(holderData);
       nowCache[holder.owner] = holderData;
-      // In background, refresh valuableTokens if needed (expired or missing)
-      fetchHolderValuableTokens(holder.owner).then(tokens => {
-        holderData.valuableTokens = tokens;
-        nowCache[holder.owner] = holderData;
-        storage.topHoldersCache[holder.owner] = holderData;
-      }).catch(err => {
-        holderData.valuableTokens = [];
-        storage.topHoldersCache[holder.owner] = holderData;
-        logError(`fetchHolderValuableTokens failed for ${holder.owner}:`, err.message || err);
-      });
-      await sleep(100);
     }
     storage.topHoldersCache = nowCache;
 
@@ -476,12 +444,18 @@ async function pollData() {
       topHolders
     };
     logInfo(`Scan completed: ${changes.current} holders`);
+
+    // Background: update all top holder caches (non-blocking, not in scan loop)
+    topHoldersRaw.forEach(holder => {
+      updateHolderValuableTokens(holder.owner)
+        .catch(e => logError("background updateHolderValuableTokens failed:", e));
+    });
   } catch (error) {
     logError("pollData:", error.message || error);
   }
 }
 
-// ------------- API Endpoints -------------
+// --- API Endpoints ---
 app.post("/api/start", async (req, res) => {
   const { mint } = req.body;
   if (!mint) return res.status(400).send("Missing token mint");
@@ -532,4 +506,3 @@ app.listen(PORT, () => {
   logInfo(`Server running on port ${PORT}`);
   logInfo(`Scan interval: 1 second`);
 });
-
