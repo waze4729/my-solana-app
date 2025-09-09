@@ -39,24 +39,31 @@ function getSecondsSinceStart() {
   const diffMs = now - storage.startTime;
   return Math.floor(diffMs / 1000);
 }
-
-// Fetch prices from Jupiter API
 async function fetchPrices() {
   try {
-    const response = await fetch('https://api.jup.ag/price/v2?ids=JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN,So11111111111111111111111111111111111111112');
+    const response = await fetch(
+      'https://lite-api.jup.ag/price/v3?ids=So11111111111111111111111111111111111111112,JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN'
+    );
     const data = await response.json();
-    
-    if (data && data.data) {
-      storage.prices.SOL = parseFloat(data.data['So11111111111111111111111111111111111111112']?.price || 0);
-      storage.prices.JUP = parseFloat(data.data['JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN']?.price || 0);
+    if (data) {
+      // Store prices
+      const sol = data.So11111111111111111111111111111111111111112;
+      const jup = data.JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN;
+      storage.prices.SOL = parseFloat(sol?.usdPrice || 0);
+      storage.prices.JUP = parseFloat(jup?.usdPrice || 0);
+      storage.prices.SOL_decimals = sol?.decimals;
+      storage.prices.JUP_decimals = jup?.decimals;
+      storage.prices.SOL_24h = sol?.priceChange24h;
+      storage.prices.JUP_24h = jup?.priceChange24h;
       storage.prices.lastUpdated = new Date();
-      console.log(`Prices updated - SOL: $${storage.prices.SOL}, JUP: $${storage.prices.JUP}`);
+      console.log(
+        `Prices updated (v3) - SOL: $${storage.prices.SOL}, JUP: $${storage.prices.JUP}`
+      );
     }
   } catch (error) {
     console.error('Error fetching prices:', error.message);
   }
 }
-
 // Calculate USD value based on token mint
 function calculateUSDValue(amount, tokenMint) {
   if (tokenMint === 'So11111111111111111111111111111111111111112') {
@@ -343,3 +350,4 @@ app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Scan interval: 1 second`);
 });
+
