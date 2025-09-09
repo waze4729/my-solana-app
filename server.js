@@ -4,9 +4,19 @@ import * as web3 from "@solana/web3.js";
 import fetch from "node-fetch";
 
 const { Connection, PublicKey } = web3;
-const RPC_ENDPOINT = "https://mainnet.helius-rpc.com/?api-key=07ed88b0-3573-4c79-8d62-3a2cbd5c141a";
-const connection = new Connection(RPC_ENDPOINT, "confirmed");
 
+// CONFIG
+const RPC_ENDPOINT = "https://mainnet.helius-rpc.com/?api-key=07ed88b0-3573-4c79-8d62-3a2cbd5c141a";
+const JUPITER_API_URL = "https://lite-api.jup.ag/price/v3?ids=";
+const TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
+const SOL_MINT = "So11111111111111111111111111111111111111112";
+const JUP_MINT = "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN";
+const JUPITER_BATCH_SIZE = 49; // <= 49 for safety
+const MAX_TOP_HOLDERS = 15;
+const MAX_RETRIES = 4;
+const RETRY_BASE_DELAY = 1800; // ms
+
+const connection = new Connection(RPC_ENDPOINT, "confirmed");
 const app = express();
 const PORT = process.env.PORT || 10000;
 
@@ -32,52 +42,120 @@ const storage = {
   }
 };
 
+// ------------- Utility Functions ------------------
+
 function getSecondsSinceStart() {
   if (!storage.startTime) return 0;
   const now = new Date();
-  const diffMs = now - storage.startTime;
-  return Math.floor(diffMs / 1000);
+  return Math.floor((now - storage.startTime) / 1000);
 }
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function logError(...args) {
+  console.error("==> [ERROR]", ...args);
+}
+
+function logInfo(...args) {
+  console.log("==>", ...args);
+}
+
+// ----------- Robust Jupiter Price Fetching -------------
+
+/**
+ * Fetches prices for an array of mints in batches, with rate limit, retry, and error handling.
+ * Returns an object { [mint]: {usdPrice, ...}, ... }
+ */
+async function fetchJupiterPricesBatched(mints, maxBatchSize = JUPITER_BATCH_SIZE) {
+  let prices = {};
+  for (let i = 0; i < mints.length; i += maxBatchSize) {
+    const batch = mints.slice(i, i + maxBatchSize);
+    let tries = 0;
+    let success = false;
+    while (tries < MAX_RETRIES && !success) {
+      try {
+        const url = JUPITER_API_URL + batch.join(",");
+        const response = await fetch(url);
+        // Handle rate limit specifically
+        if (!response.ok) {
+          const body = await response.text();
+          if (response.status === 429 || body.includes("Rate limit")) {
+            logError(`[JUPITER RATE LIMIT] HTTP 429 or rate-limit on batch:`, batch, `Retry in ${RETRY_BASE_DELAY * (tries + 1)}ms`);
+            await sleep(RETRY_BASE_DELAY * (tries + 1));
+            tries++;
+            continue;
+          }
+          logError(`Jupiter API HTTP ${response.status} for batch:`, batch, "Body:", body);
+          break;
+        }
+        // Try to parse JSON, handle invalid JSON gracefully
+        let priceData;
+        try {
+          priceData = await response.json();
+        } catch (err) {
+          logError(`Invalid JSON from Jupiter for batch:`, batch, err.message);
+          break;
+        }
+        // Merge
+        prices = { ...prices, ...priceData };
+        success = true;
+      } catch (err) {
+        logError(`Jupiter fetch error for batch:`, batch, err.message || err);
+        await sleep(RETRY_BASE_DELAY * (tries + 1));
+        tries++;
+      }
+    }
+    // If after retries not successful, skip batch, log
+    if (!success) {
+      logError("[JUPITER] Failed to get prices for batch after retries:", batch);
+    }
+    // Be nice to Jupiter and add a small delay between batches
+    await sleep(250);
+  }
+  return prices;
+}
+
+// ------------- Price Fetching for Global Dashboard ------------
 
 async function fetchPrices() {
   if (!storage.tokenMint) return;
   try {
     const MINTS = [
       storage.tokenMint,
-      'So11111111111111111111111111111111111111112',
-      'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN'
+      SOL_MINT,
+      JUP_MINT
     ].filter(Boolean);
-    const response = await fetch(
-      `https://lite-api.jup.ag/price/v3?ids=${MINTS.join(',')}`
-    );
-    const data = await response.json();
-    Object.keys(data).forEach(mint => {
-      storage.prices[mint] = parseFloat(data[mint]?.usdPrice || 0);
+    const prices = await fetchJupiterPricesBatched(MINTS, JUPITER_BATCH_SIZE);
+    Object.keys(prices).forEach(mint => {
+      storage.prices[mint] = parseFloat(prices[mint]?.usdPrice || 0);
     });
     storage.prices.lastUpdated = new Date();
+    logInfo("Fetched prices:", storage.prices);
   } catch (error) {
-    console.error('Error fetching prices:', error.message);
+    logError("fetchPrices:", error.message || error);
   }
 }
 
 function calculateUSDValue(amount, tokenMint) {
   const price = storage.prices[tokenMint];
-  if (price && amount) {
-    return amount * price;
-  }
+  if (price && amount) return amount * price;
   return 0;
 }
+
+// ------------- SPL Token Account Fetching ------------
 
 async function fetchAllTokenAccounts(mintAddress) {
   const mintPublicKey = new PublicKey(mintAddress);
   try {
     const accounts = await connection.getParsedProgramAccounts(
-      new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
-      { 
+      new PublicKey(TOKEN_PROGRAM_ID),
+      {
         filters: [
-          { dataSize: 165 }, 
+          { dataSize: 165 },
           { memcmp: { offset: 0, bytes: mintPublicKey.toBase58() } }
-        ] 
+        ]
       }
     );
     return accounts.map((acc) => {
@@ -91,10 +169,12 @@ async function fetchAllTokenAccounts(mintAddress) {
       };
     }).filter(a => a.amount > 0);
   } catch (e) {
-    console.error("Fetch error:", e.message || e);
+    logError("fetchAllTokenAccounts:", e.message || e);
     return [];
   }
 }
+
+// ----------------- Analysis Functions (Unchanged) ------------------
 
 function makeStepBuckets() {
   const buckets = {};
@@ -156,11 +236,11 @@ async function analyzeTop50(fresh, initialTop50, initialTop50Amounts, previousTo
   const currentTop50 = sorted.slice(0, 50).map(h => h.owner);
   const currentTop50Map = new Map(sorted.slice(0, 50).map(h => [h.owner, h.amount]));
   const currentTop50MinAmount = sorted[49]?.amount || 0;
-  const newSinceLastFetch = currentTop50.filter(owner => 
-    !previousTop50.has(owner) && 
+  const newSinceLastFetch = currentTop50.filter(owner =>
+    !previousTop50.has(owner) &&
     (currentTop50Map.get(owner) > previousTop50MinAmount)
   );
-  const newSinceFirstFetch = currentTop50.filter(owner => 
+  const newSinceFirstFetch = currentTop50.filter(owner =>
     storage.allTimeNewTop50.has(owner)
   ).length;
   newSinceLastFetch.forEach(owner => {
@@ -216,12 +296,13 @@ async function analyzeTop50(fresh, initialTop50, initialTop50Amounts, previousTo
   };
 }
 
-// Fetches valuable tokens for a wallet (> $37 per token, up to 50 tokens per price query)
+// ----------- Holder Valuable Tokens with Robust Fetch and Throttle -----------
+
 async function fetchHolderValuableTokens(owner) {
   try {
     const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
       new PublicKey(owner),
-      { programId: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA") }
+      { programId: new PublicKey(TOKEN_PROGRAM_ID) }
     );
     const tokens = tokenAccounts.value.map(acc => {
       const parsed = acc.account.data.parsed;
@@ -233,13 +314,7 @@ async function fetchHolderValuableTokens(owner) {
     }).filter(t => t.amount > 0);
     if (tokens.length === 0) return [];
     const uniqueMints = [...new Set(tokens.map(t => t.mint))];
-    let prices = {};
-    for (let i = 0; i < uniqueMints.length; i += 50) {
-      const batch = uniqueMints.slice(i, i + 50);
-      const priceRes = await fetch(`https://lite-api.jup.ag/price/v3?ids=${batch.join(",")}`);
-      const priceData = await priceRes.json();
-      prices = { ...prices, ...priceData };
-    }
+    const prices = await fetchJupiterPricesBatched(uniqueMints, JUPITER_BATCH_SIZE);
     return tokens
       .map(t => {
         const price = prices[t.mint]?.usdPrice;
@@ -254,15 +329,18 @@ async function fetchHolderValuableTokens(owner) {
       .filter(t => t && t.usdValue > 37)
       .sort((a, b) => b.usdValue - a.usdValue);
   } catch (e) {
-    console.error("Error fetching holder tokens", e.message || e);
+    logError("fetchHolderValuableTokens:", e.message || e);
     return [];
   }
 }
+
+// ------------- Poll Data - Throttle Top Holder Processing ------------
 
 async function pollData() {
   if (!storage.tokenMint || !storage.scanning) return;
   try {
     const fresh = await fetchAllTokenAccounts(storage.tokenMint);
+
     if (!storage.initialTop50) {
       const sorted = fresh.slice().sort((a, b) => b.amount - a.amount);
       storage.initialTop50 = sorted.slice(0, 50).map(h => h.owner);
@@ -270,19 +348,30 @@ async function pollData() {
       storage.previousTop50 = new Set(storage.initialTop50);
       storage.previousTop50MinAmount = sorted[49]?.amount || 0;
     }
+
     const changes = analyze(storage.registry, fresh);
     const top50Stats = await analyzeTop50(
-      fresh, 
-      storage.initialTop50, 
+      fresh,
+      storage.initialTop50,
       storage.initialTop50Amounts,
       storage.previousTop50,
       storage.previousTop50MinAmount
     );
-    // Top Holders with valuable tokens
-    const topHolders = [...fresh].sort((a, b) => b.amount - a.amount).slice(0, 15);
-    for (const holder of topHolders) {
-      holder.valuableTokens = await fetchHolderValuableTokens(holder.owner);
+
+    // Top Holders: process serially with a delay to avoid bursts
+    const topHoldersRaw = [...fresh].sort((a, b) => b.amount - a.amount).slice(0, MAX_TOP_HOLDERS);
+    const topHolders = [];
+    for (const holder of topHoldersRaw) {
+      try {
+        holder.valuableTokens = await fetchHolderValuableTokens(holder.owner);
+      } catch (err) {
+        holder.valuableTokens = [];
+        logError(`fetchHolderValuableTokens failed for ${holder.owner}:`, err.message || err);
+      }
+      topHolders.push(holder);
+      await sleep(250); // Throttle between holders
     }
+
     storage.latestData = {
       fresh,
       registry: storage.registry,
@@ -295,11 +384,13 @@ async function pollData() {
       tokenMint: storage.tokenMint,
       topHolders
     };
-    console.log(`Scan completed at ${new Date().toLocaleTimeString()} - ${changes.current} holders`);
+    logInfo(`Scan completed: ${changes.current} holders`);
   } catch (error) {
-    console.error("Error in pollData:", error.message);
+    logError("pollData:", error.message || error);
   }
 }
+
+// ------------- API Endpoints ------------
 
 app.post("/api/start", async (req, res) => {
   const { mint } = req.body;
@@ -336,12 +427,12 @@ app.get("/api/status", (req, res) => {
   }
   storage.latestData.tokenMint = storage.tokenMint;
   storage.latestData.currentTokenPrice = storage.prices[storage.tokenMint] || 0;
-  storage.latestData.solPrice = storage.prices["So11111111111111111111111111111111111111112"] || 0;
-  storage.latestData.jupPrice = storage.prices["JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"] || 0;
+  storage.latestData.solPrice = storage.prices[SOL_MINT] || 0;
+  storage.latestData.jupPrice = storage.prices[JUP_MINT] || 0;
   res.json(storage.latestData);
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`Scan interval: 1 second`);
+  logInfo(`Server running on port ${PORT}`);
+  logInfo(`Scan interval: 1 second`);
 });
