@@ -143,8 +143,11 @@
     }
     @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.02); } }
     .dashboard {
-      display: grid; grid-template-columns: repeat(5, 1fr); gap: 25px;
-      margin-bottom: 40px; overflow-x: auto;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 25px;
+      margin-bottom: 0;
+      overflow-x: auto;
     }
     .card {
       background: rgba(30, 41, 59, 0.8); backdrop-filter: blur(20px);
@@ -177,50 +180,80 @@
     .positive { color: var(--success); }
     .neutral { color: var(--gray); }
     .holders-list {
-      flex: 1; overflow-y: auto; max-height: 450px; margin-top: 10px;
-      border-radius: 12px; background: rgba(0, 0, 0, 0.2); padding: 8px;
+      flex: 1; overflow-y: auto; max-height: 650px; margin-top: 10px;
+      border-radius: 16px; background: rgba(0, 0, 0, 0.18); padding: 14px 12px 12px 12px;
       scrollbar-width: thin; scrollbar-color: var(--primary) transparent;
     }
     .holders-list::-webkit-scrollbar { width: 6px; }
     .holders-list::-webkit-scrollbar-track { background: transparent; }
     .holders-list::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 3px; }
     /* Top holders better layout */
+    .top-holders-card {
+      margin-top: 36px;
+      margin-bottom: 36px;
+      width: 100%;
+      max-width: 100%;
+      background: rgba(30,41,59,0.95);
+      border-radius: 30px;
+      box-shadow: var(--shadow-lg);
+      border: 2px solid var(--primary-dark);
+      padding: 32px 28px 25px 28px;
+      display: flex;
+      flex-direction: column;
+      align-items: stretch;
+    }
+    .top-holders-header {
+      font-size: 22px;
+      font-weight: 700;
+      color: var(--accent);
+      letter-spacing: -0.03em;
+      margin-bottom: 20px;
+      text-shadow: 0 2px 10px #0008;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
     .holder-item {
       display: flex;
       flex-direction: column;
-      padding: 16px;
-      border-bottom: 1px solid rgba(255,255,255,0.08);
-      background: rgba(30,41,59,0.6);
+      padding: 16px 0 8px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.10);
+      background: transparent;
       border-radius: 10px;
-      margin-bottom: 8px;
+      margin-bottom: 0;
     }
+    .holder-item:last-child { border-bottom: none;}
     .holder-row {
       display: flex;
       align-items: center;
       justify-content: space-between;
     }
     .holder-row-main {
-      font-size: 14px;
+      font-size: 15px;
       font-weight: 600;
-      margin-bottom: 8px;
+      margin-bottom: 7px;
+      gap: 18px;
+      display: flex;
+      align-items: center;
     }
     .holder-row-tokens {
       display: flex;
       flex-wrap: wrap;
-      gap: 12px;
-      margin-top: 6px;
-      margin-left: 32px;
-      padding-top: 6px;
+      gap: 10px;
+      margin-top: 2px;
+      margin-left: 36px;
+      padding-top: 2px;
     }
     .valuable-token-item {
       display: flex;
       align-items: center;
-      background: rgba(147, 51, 234, 0.09);
-      border-radius: 7px;
-      padding: 6px 12px;
+      background: rgba(147, 51, 234, 0.15);
+      border-radius: 8px;
+      padding: 7px 15px 7px 7px;
       margin-bottom: 2px;
       font-size: 13px;
       min-width: 110px;
+      box-shadow: 0 2px 8px rgba(147, 51, 234, 0.04);
     }
     .valuable-token-logo {
       width: 22px;
@@ -229,25 +262,39 @@
       border-radius: 5px;
       object-fit: contain;
       background: #222;
+      border: 1.5px solid #333;
     }
     .valuable-token-name {
-      font-weight: 500;
+      font-weight: 600;
       margin-right: 4px;
+      color: var(--light);
+      font-size: 13px;
     }
     .valuable-token-value {
       font-weight: 700;
-      color: var(--success);
+      color: var(--accent);
+      font-size: 13px;
     }
-    .holder-left { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0;}
-    .holder-right { display: flex; flex-direction: column; align-items: flex-end; gap: 2px;}
     .holder-address {
-      font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--gray);
+      font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--gray);
       text-decoration: none; transition: color 0.2s ease; cursor: pointer;
-      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 140px;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 150px;
+      background: rgba(0,0,0,0.12); padding: 3px 10px; border-radius: 7px;
+      border: 1px solid rgba(147, 51, 234, 0.08);
+      margin-left: 4px;
     }
     .holder-address:hover { color: var(--secondary); text-decoration: underline;}
-    .holder-amount { font-weight: 600; font-size: 13px; color: var(--light);}
-    .holder-usd { font-size: 11px; color: var(--success); font-weight: 500;}
+    .holder-amount { font-weight: 700; font-size: 14px; color: var(--light);}
+    .holder-usd { font-size: 13px; color: var(--success); font-weight: 600; margin-left:6px;}
+    .rank-badge {
+      display: flex; align-items: center; justify-content: center;
+      width: 26px; height: 26px; border-radius: 50%; background: var(--gradient-1);
+      color: white; font-size: 13px; font-weight: 700; flex-shrink: 0;
+      margin-right: 6px;
+      border: 2.5px solid var(--accent);
+      box-shadow: 0 2px 10px #0004;
+    }
+    .top-3 .rank-badge { background: var(--gradient-2); border-color: var(--success);}
     .last-updated {
       text-align: center; margin-top: 30px; color: var(--gray); font-size: 14px;
       padding: 15px; background: rgba(30, 41, 59, 0.5); border-radius: 10px; font-weight: 500;
@@ -261,23 +308,18 @@
       border-top: 2px solid transparent; border-radius: 50%; animation: spin 1s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
-    .rank-badge {
-      display: flex; align-items: center; justify-content: center;
-      width: 24px; height: 24px; border-radius: 50%; background: var(--gradient-1);
-      color: white; font-size: 11px; font-weight: 700; flex-shrink: 0;
-    }
-    .top-3 .rank-badge { background: var(--gradient-2); box-shadow: 0 2px 8px rgba(245, 87, 108, 0.4);}
-    @media (max-width: 1600px) { .dashboard { grid-template-columns: repeat(4, 1fr); } }
-    @media (max-width: 1400px) { .dashboard { grid-template-columns: repeat(3, 1fr); } }
-    @media (max-width: 1024px) {
-      .dashboard { grid-template-columns: repeat(2, 1fr);}
-      h1 { font-size: 2rem;}
-    }
-    @media (max-width: 768px) {
+    @media (max-width: 1600px) { .dashboard { grid-template-columns: repeat(3, 1fr); } }
+    @media (max-width: 1200px) { .dashboard { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 900px) {
       .dashboard { grid-template-columns: 1fr;}
-      input { width: 100%;}
-      .scan-info, .price-info { flex-direction: column; align-items: center;}
-      .card { min-width: auto;}
+      .top-holders-card { padding: 12px 3vw 8px 3vw; }
+      h1 { font-size: 2rem;}
+      .holder-row-tokens { margin-left: 0; }
+    }
+    @media (max-width: 600px) {
+      .dashboard { grid-template-columns: 1fr;}
+      .top-holders-card { padding: 4vw 1vw 4vw 1vw; }
+      .holder-row-main { flex-direction: column; align-items: flex-start; gap: 4px; }
       h1 { font-size: 1.8rem;}
       .controls { flex-direction: column; align-items: center;}
     }
@@ -319,7 +361,7 @@
     <div class="status stopped" id="status">
       Not scanning. Enter a token mint address and click Start Scan.
     </div>
-    <div class="dashboard">
+    <div class="dashboard" id="dashboard">
       <div class="card">
         <h2>📊 General Stats</h2>
         <div id="generalStats">
@@ -363,13 +405,18 @@
           <div class="loading">Waiting for data</div>
         </div>
       </div>
-      <div class="card">
-        <h2>💎 Top Holders</h2>
-        <div class="holders-list" id="topHolders">
-          <div class="loading">Waiting for data</div>
-        </div>
+    </div>
+
+    <!-- Top Holders Card on its own row below dashboard -->
+    <div class="top-holders-card" id="topHoldersCard">
+      <div class="top-holders-header">
+        <span>💎 Top Holders</span>
+      </div>
+      <div class="holders-list" id="topHolders">
+        <div class="loading">Waiting for data</div>
       </div>
     </div>
+
     <div class="last-updated" id="lastUpdated">
       Last updated: -
     </div>
