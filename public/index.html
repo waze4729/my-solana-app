@@ -259,7 +259,60 @@
       .card { min-width: auto;}
       h1 { font-size: 1.8rem;}
       .controls { flex-direction: column; align-items: center;}
-    }
+    } /* Top holders better layout */
+.holder-item {
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+  background: rgba(30,41,59,0.6);
+  border-radius: 10px;
+  margin-bottom: 8px;
+}
+.holder-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.holder-row-main {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.holder-row-tokens {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 6px;
+  margin-left: 32px;
+  padding-top: 6px;
+}
+.valuable-token-item {
+  display: flex;
+  align-items: center;
+  background: rgba(147, 51, 234, 0.09);
+  border-radius: 7px;
+  padding: 6px 12px;
+  margin-bottom: 2px;
+  font-size: 13px;
+  min-width: 110px;
+}
+.valuable-token-logo {
+  width: 22px;
+  height: 22px;
+  margin-right: 7px;
+  border-radius: 5px;
+  object-fit: contain;
+  background: #222;
+}
+.valuable-token-name {
+  font-weight: 500;
+  margin-right: 4px;
+}
+.valuable-token-value {
+  font-weight: 700;
+  color: var(--success);
+}
   </style>
 </head>
 <body>
@@ -627,3 +680,4 @@
   </script>
 </body>
 </html>
+
