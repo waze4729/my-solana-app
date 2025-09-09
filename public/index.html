@@ -27,7 +27,6 @@
       --shadow-lg: 0 20px 40px rgba(0, 0, 0, 0.15);
     }
     * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
     body {
       background: linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #334155 100%);
       background-attachment: fixed;
@@ -36,17 +35,6 @@
       padding: 20px;
       position: relative;
       overflow-x: hidden;
-    }
-    body::before {
-      content: '';
-      position: fixed;
-      top: 0; left: 0; width: 100%; height: 100%;
-      background: 
-        radial-gradient(circle at 20% 20%, rgba(147, 51, 234, 0.1) 0%, transparent 50%),
-        radial-gradient(circle at 80% 80%, rgba(6, 182, 212, 0.1) 0%, transparent 50%),
-        radial-gradient(circle at 40% 60%, rgba(245, 158, 11, 0.05) 0%, transparent 50%);
-      pointer-events: none;
-      z-index: -1;
     }
     .container { max-width: 1800px; margin: 0 auto; position: relative; z-index: 1;}
     header {
@@ -142,13 +130,7 @@
       border-color: rgba(239, 68, 68, 0.3);
     }
     @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.02); } }
-    .dashboard {
-      display: grid;
-      grid-template-columns: repeat(4, 1fr);
-      gap: 25px;
-      margin-bottom: 0;
-      overflow-x: auto;
-    }
+    .dashboard { display: grid; grid-template-columns: repeat(4, 1fr); gap: 25px; margin-bottom: 0; overflow-x: auto;}
     .card {
       background: rgba(30, 41, 59, 0.8); backdrop-filter: blur(20px);
       border-radius: 20px; padding: 25px; box-shadow: var(--shadow);
@@ -187,7 +169,6 @@
     .holders-list::-webkit-scrollbar { width: 6px; }
     .holders-list::-webkit-scrollbar-track { background: transparent; }
     .holders-list::-webkit-scrollbar-thumb { background: var(--primary); border-radius: 3px; }
-    /* Top holders better layout */
     .top-holders-card {
       margin-top: 36px;
       margin-bottom: 36px;
@@ -226,7 +207,9 @@
     .holder-row {
       display: flex;
       align-items: center;
-      justify-content: space-between;
+      justify-content: flex-start;
+      flex-wrap: wrap;
+      gap: 12px;
     }
     .holder-row-main {
       font-size: 15px;
@@ -243,6 +226,7 @@
       margin-top: 2px;
       margin-left: 36px;
       padding-top: 2px;
+      align-items: center;
     }
     .valuable-token-item {
       display: flex;
@@ -254,6 +238,7 @@
       font-size: 13px;
       min-width: 110px;
       box-shadow: 0 2px 8px rgba(147, 51, 234, 0.04);
+      cursor: pointer;
     }
     .valuable-token-logo {
       width: 22px;
@@ -274,6 +259,17 @@
       font-weight: 700;
       color: var(--accent);
       font-size: 13px;
+    }
+    .holder-label {
+      font-weight: 600;
+      color: var(--accent);
+      margin-right: 5px;
+    }
+    .other-tokens-label {
+      font-weight: 600;
+      color: var(--gray-light);
+      margin-right: 6px;
+      margin-left: 8px;
     }
     .holder-address {
       font-family: 'JetBrains Mono', monospace; font-size: 13px; color: var(--gray);
@@ -406,8 +402,6 @@
         </div>
       </div>
     </div>
-
-    <!-- Top Holders Card on its own row below dashboard -->
     <div class="top-holders-card" id="topHoldersCard">
       <div class="top-holders-header">
         <span>💎 Top Holders</span>
@@ -416,7 +410,6 @@
         <div class="loading">Waiting for data</div>
       </div>
     </div>
-
     <div class="last-updated" id="lastUpdated">
       Last updated: -
     </div>
@@ -428,7 +421,6 @@
     let isScanning = false;
     let lastPrices = { tokenMint: '', currentTokenPrice: 0, solPrice: 0, jupPrice: 0, prices: { lastUpdated: null } };
 
-    // Fetch ONLY prices every 5 seconds, independent of scan
     function fetchPricesOnly() {
       fetch('/api/status')
         .then(response => response.json())
@@ -437,7 +429,6 @@
         })
         .catch(() => {});
     }
-
     function startScan() {
       const mint = document.getElementById('mint').value.trim();
       if (!mint) { alert('Please enter a token mint address'); return; }
@@ -462,7 +453,6 @@
         fetchStatus();
       })
       .catch(error => {
-        console.error('Error starting scan:', error);
         document.getElementById('status').textContent = 'Error starting scan - Please try again';
         document.getElementById('status').className = 'status stopped';
         document.getElementById('startBtn').disabled = false;
@@ -481,7 +471,6 @@
         if (scanInterval) { clearInterval(scanInterval); scanInterval = null; }
       })
       .catch(error => {
-        console.error('Error stopping scan:', error);
         document.getElementById('status').textContent = 'Error stopping scan';
       });
     }
@@ -536,9 +525,13 @@
           updateDisplay(data);
         })
         .catch(error => {
-          console.error('Error fetching status:', error);
           if (isScanning) document.getElementById('status').textContent = 'Connection lost - Reconnecting...';
         });
+    }
+    function scanToken(mint) {
+      document.getElementById('mint').value = mint;
+      document.getElementById('mint').placeholder = mint;
+      startScan();
     }
     function updateDisplay(data) {
       if (data.prices) updatePrices(data.prices, data.tokenMint);
@@ -602,15 +595,12 @@
       } else {
         top50Container.innerHTML = '<div class="loading">Building top 50 baseline</div>';
       }
-      // ---- Top Holders with valuable tokens ----
       const topHoldersContainer = document.getElementById('topHolders');
       topHoldersContainer.innerHTML = '';
       if (data.topHolders && data.topHolders.length > 0) {
         data.topHolders.forEach((holder, index) => {
           const holderItem = document.createElement('div');
           holderItem.className = `holder-item ${index < 3 ? 'top-3' : ''}`;
-          // Two rows: first = main, second = tokens
-          // Row 1: rank, address, token count, $value
           const holderRow = document.createElement('div');
           holderRow.className = 'holder-row holder-row-main';
           const rankBadge = document.createElement('div');
@@ -624,30 +614,40 @@
           addressLink.rel = 'noopener noreferrer';
           addressLink.title = holder.owner;
           addressLink.textContent = shortAddress;
-          // Token holding (amount, NO $ sign)
-          const amountSpan = document.createElement('div');
+          const amountLabel = document.createElement('span');
+          amountLabel.className = 'holder-label';
+          amountLabel.textContent = "Holding Tokens:";
+          const amountSpan = document.createElement('span');
           amountSpan.className = 'holder-amount';
           amountSpan.textContent = formatTokenCount(holder.amount);
-          // USD value (with $)
-          const usdSpan = document.createElement('div');
+          const valueLabel = document.createElement('span');
+          valueLabel.className = 'holder-label';
+          valueLabel.style.marginLeft = "12px";
+          valueLabel.textContent = "Holding Value:";
+          const usdSpan = document.createElement('span');
           usdSpan.className = 'holder-usd';
           if (holder.usdValue && holder.usdValue > 0) {
-            usdSpan.textContent = `${formatUSD(holder.usdValue)}`;
+            usdSpan.textContent = formatUSD(holder.usdValue, true);
           } else {
             usdSpan.textContent = 'N/A';
           }
           holderRow.appendChild(rankBadge);
           holderRow.appendChild(addressLink);
-          holderRow.appendChild(amountSpan);
-          holderRow.appendChild(usdSpan);
+          holderRow.appendChild(amountLabel); holderRow.appendChild(amountSpan);
+          holderRow.appendChild(valueLabel); holderRow.appendChild(usdSpan);
           holderItem.appendChild(holderRow);
-          // Row 2: valuable tokens
           if (holder.valuableTokens && holder.valuableTokens.length > 0) {
             const tokensRow = document.createElement('div');
             tokensRow.className = 'holder-row-tokens';
+            const otherLabel = document.createElement('span');
+            otherLabel.className = 'other-tokens-label';
+            otherLabel.textContent = "This wallet also holds →";
+            tokensRow.appendChild(otherLabel);
             holder.valuableTokens.forEach(token => {
               const tokenItem = document.createElement('div');
               tokenItem.className = 'valuable-token-item';
+              tokenItem.title = "Click to scan this token";
+              tokenItem.onclick = () => scanToken(token.symbol || token.name);
               const logo = token.logoURI
                 ? `<img src="${token.logoURI}" class="valuable-token-logo" width="22" height="22" alt="${token.name}">`
                 : '';
@@ -674,11 +674,11 @@
       else if (num >= 1) return num.toFixed(2);
       else return num.toFixed(6);
     }
-    function formatUSD(num, alwaysDollar) {
+    function formatUSD(num) {
       if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M$';
       else if (num >= 1000) return (num / 1000).toFixed(1) + 'K$';
-      else if (num >= 1) return num.toFixed(2) + (alwaysDollar ? '$' : '');
-      else return num.toFixed(4) + (alwaysDollar ? '$' : '');
+      else if (num >= 1) return num.toFixed(2) + '$';
+      else return num.toFixed(4) + '$';
     }
     document.addEventListener('DOMContentLoaded', function() {
       document.getElementById('startedAt').textContent = '-';
@@ -688,7 +688,6 @@
       document.getElementById('unchanged').textContent = '-';
       document.getElementById('pollInterval').textContent = '1 second';
       document.getElementById('currentToken').textContent = 'SOL (example)';
-      // Start price polling every 5s even without scan
       priceInterval = setInterval(fetchPricesOnly, 5000);
       fetchPricesOnly();
     });
