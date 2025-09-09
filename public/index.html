@@ -136,9 +136,10 @@
     
     .dashboard {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      grid-template-columns: repeat(5, 1fr); /* Changed to 5 columns */
       gap: 20px;
       margin-bottom: 30px;
+      overflow-x: auto; /* Allow horizontal scrolling on small screens */
     }
     
     .card {
@@ -146,6 +147,7 @@
       border-radius: 10px;
       padding: 20px;
       box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+      min-width: 230px; /* Ensure cards don't get too narrow */
     }
     
     .card h2 {
@@ -153,6 +155,7 @@
       margin-bottom: 15px;
       padding-bottom: 10px;
       border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+      font-size: 16px; /* Slightly smaller font for compact layout */
     }
     
     .stat-grid {
@@ -166,6 +169,7 @@
       justify-content: space-between;
       padding: 8px 0;
       border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      font-size: 14px; /* Slightly smaller font */
     }
     
     .stat-item:last-child {
@@ -198,16 +202,18 @@
       justify-content: space-between;
       padding: 10px;
       border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+      font-size: 12px; /* Smaller font for holder items */
     }
     
     .holder-address {
       font-family: monospace;
-      font-size: 12px;
+      font-size: 11px; /* Smaller font for addresses */
       color: var(--gray);
     }
     
     .holder-amount {
       font-weight: bold;
+      font-size: 12px; /* Smaller font for amounts */
     }
     
     .last-updated {
@@ -221,11 +227,24 @@
       text-align: center;
       padding: 20px;
       color: var(--gray);
+      font-size: 14px;
+    }
+    
+    @media (max-width: 1400px) {
+      .dashboard {
+        grid-template-columns: repeat(3, 1fr); /* 3 columns on medium screens */
+      }
+    }
+    
+    @media (max-width: 1024px) {
+      .dashboard {
+        grid-template-columns: repeat(2, 1fr); /* 2 columns on smaller screens */
+      }
     }
     
     @media (max-width: 768px) {
       .dashboard {
-        grid-template-columns: 1fr;
+        grid-template-columns: 1fr; /* 1 column on mobile */
       }
       
       input {
@@ -235,6 +254,10 @@
       .scan-info {
         flex-direction: column;
         align-items: center;
+      }
+      
+      .card {
+        min-width: auto; /* Reset min-width on mobile */
       }
     }
   </style>
@@ -487,23 +510,19 @@
       if (data.top50Stats) {
         top50Container.innerHTML = `
           <div class="stat-item">
-            <span>Still in top 50:</span>
-            <span class="stat-value positive">${data.top50Stats.stillInTop50Count}</span>
-          </div>
-          <div class="stat-item">
-            <span>Gone from top 50:</span>
+            <span>Gone from top 50 Holders:</span>
             <span class="stat-value negative">${data.top50Stats.goneFromInitialTop50Count}</span>
           </div>
           <div class="stat-item">
-            <span>New in top 50:</span>
+            <span>New in top 50 Holders:</span>
             <span class="stat-value positive">${data.top50Stats.newInTop50Count}</span>
           </div>
           <div class="stat-item">
-            <span>Completely new since last fetch:</span>
+            <span>Completely new Holder since last fetch:</span>
             <span class="stat-value">${data.top50Stats.completelyNewSinceLastFetch}</span>
           </div>
           <div class="stat-item">
-            <span>Completely new since first fetch:</span>
+            <span>Completely new  Holder since first fetch:</span>
             <span class="stat-value">${data.top50Stats.completelyNewSinceFirstFetch}</span>
           </div>
         `;
