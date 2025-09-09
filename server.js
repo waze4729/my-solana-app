@@ -11,7 +11,7 @@ const JUPITER_TOKENINFO_URL = "https://lite-api.jup.ag/tokens/v1/";
 const TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const JUP_MINT = "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN";
-const JUPITER_BATCH_SIZE = 100; // Increased batch size for Jupiter API
+const JUPITER_BATCH_SIZE = 49; // Increased batch size for Jupiter API
 const MAX_TOP_HOLDERS = 20;
 const MAX_RETRIES = 2;
 const RETRY_BASE_DELAY = 1200;
@@ -703,3 +703,4 @@ app.get("/api/status", (req, res) => {
 app.listen(PORT, () => {
   logInfo(`Server running on port ${PORT}`);
 });
+
