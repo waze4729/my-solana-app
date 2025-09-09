@@ -203,6 +203,30 @@
     .valuable-tokens-title { color: var(--accent); font-size: 12px; margin: 5px 0 3px 18px; }
     .valuable-tokens-list { font-size: 11px; color: var(--gray-light); margin-left: 18px; margin-bottom: 2px;}
     .valuable-token-item { margin: 2px 0; }
+    .valuable-token-logo {
+      vertical-align: middle;
+      margin-right: 7px;
+      border-radius: 8px;
+      background: #222;
+      width: 32px;
+      height: 32px;
+      object-fit: contain;
+      display: inline-block;
+    }
+    .valuable-token-name {
+      vertical-align: middle;
+      font-weight: 500;
+      font-size: 13px;
+      color: var(--light);
+      margin-right: 2px;
+    }
+    .valuable-token-value {
+      vertical-align: middle;
+      font-weight: 600;
+      color: var(--success);
+      margin-left: 3px;
+      font-size: 13px;
+    }
     .last-updated {
       text-align: center; margin-top: 30px; color: var(--gray); font-size: 14px;
       padding: 15px; background: rgba(30, 41, 59, 0.5); border-radius: 10px; font-weight: 500;
@@ -331,8 +355,21 @@
   </div>
   <script>
     let scanInterval = null;
+    let priceInterval = null;
     let startTime = null;
     let isScanning = false;
+    let lastPrices = { tokenMint: '', currentTokenPrice: 0, solPrice: 0, jupPrice: 0, prices: { lastUpdated: null } };
+
+    // Fetch ONLY prices every 5 seconds, independent of scan
+    function fetchPricesOnly() {
+      fetch('/api/status')
+        .then(response => response.json())
+        .then(data => {
+          if (data.prices) updatePrices(data.prices, data.tokenMint);
+        })
+        .catch(() => {});
+    }
+
     function startScan() {
       const mint = document.getElementById('mint').value.trim();
       if (!mint) { alert('Please enter a token mint address'); return; }
@@ -391,19 +428,22 @@
       document.getElementById('timeRunning').textContent = 
         `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
     }
-    function updatePrices(data) {
+    function updatePrices(prices, tokenMintOverride) {
+      // Use last fetched prices if available
+      const tokenMint = tokenMintOverride || lastPrices.tokenMint;
       let symbol = "Token";
-      if (data.tokenMint === "So11111111111111111111111111111111111111112") symbol = "SOL";
-      else if (data.tokenMint === "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN") symbol = "JUP";
-      else if (data.tokenMint) symbol = data.tokenMint.substring(0, 4) + "..." + data.tokenMint.substring(data.tokenMint.length - 4);
+      if (tokenMint === "So11111111111111111111111111111111111111112") symbol = "SOL";
+      else if (tokenMint === "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN") symbol = "JUP";
+      else if (tokenMint) symbol = tokenMint.substring(0, 4) + "..." + tokenMint.substring(tokenMint.length - 4);
       document.getElementById('tokenSymbol').textContent = symbol + ":";
-      document.getElementById('tokenPrice').textContent = data.currentTokenPrice ? `${data.currentTokenPrice.toFixed(4)}$` : "0.00$";
-      document.getElementById('solPrice').textContent = data.solPrice ? `${data.solPrice.toFixed(2)}$` : "0.00$";
-      document.getElementById('jupPrice').textContent = data.jupPrice ? `${data.jupPrice.toFixed(4)}$` : "0.0000$";
-      if (data.prices && data.prices.lastUpdated) {
-        const lastUpdated = new Date(data.prices.lastUpdated);
+      document.getElementById('tokenPrice').textContent = prices[tokenMint] ? `${Number(prices[tokenMint]).toFixed(4)}$` : "0.00$";
+      document.getElementById('solPrice').textContent = prices["So11111111111111111111111111111111111111112"] ? `${Number(prices["So11111111111111111111111111111111111111112"]).toFixed(2)}$` : "0.00$";
+      document.getElementById('jupPrice').textContent = prices["JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"] ? `${Number(prices["JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN"]).toFixed(4)}$` : "0.0000$";
+      if (prices.lastUpdated) {
+        const lastUpdated = new Date(prices.lastUpdated);
         document.getElementById('priceUpdated').textContent = timeAgo(lastUpdated);
       }
+      lastPrices = { ...lastPrices, ...prices, tokenMint };
     }
     function timeAgo(date) {
       const now = new Date();
@@ -434,7 +474,7 @@
         });
     }
     function updateDisplay(data) {
-      if (data.prices) updatePrices(data.prices);
+      if (data.prices) updatePrices(data.prices, data.tokenMint);
       if (data.startTime) {
         startTime = new Date(data.startTime);
         document.getElementById('startedAt').textContent = startTime.toLocaleString();
@@ -535,22 +575,21 @@
           holderItem.appendChild(holderRight);
           // Valuable tokens display
           if (holder.valuableTokens && holder.valuableTokens.length > 0) {
-            const tokensTitle = document.createElement('div');
-            tokensTitle.className = 'valuable-tokens-title';
-            tokensTitle.textContent = 'Other tokens >$37:';
             const tokensList = document.createElement('div');
             tokensList.className = 'valuable-tokens-list';
             holder.valuableTokens.forEach(token => {
               const tokenItem = document.createElement('div');
               tokenItem.className = 'valuable-token-item';
+              const logo = token.logoURI
+                ? `<img src="${token.logoURI}" class="valuable-token-logo" width="32" height="32" alt="${token.name}">`
+                : '';
               tokenItem.innerHTML = `
-                <span title="${token.mint}">${token.mint.substring(0,4)}...${token.mint.slice(-4)}</span>
-                : <span>${formatNumber(token.amount)}</span>
-                = <span>${formatUSD(token.usdValue)}$</span>
+                ${logo}
+                <span class="valuable-token-name">${token.name}</span>
+                <span class="valuable-token-value">${formatUSD(token.usdValue, true)}</span>
               `;
               tokensList.appendChild(tokenItem);
             });
-            holderItem.appendChild(tokensTitle);
             holderItem.appendChild(tokensList);
           }
           topHoldersContainer.appendChild(holderItem);
@@ -561,17 +600,17 @@
       document.getElementById('lastUpdated').textContent = `Last updated: ${new Date().toLocaleTimeString()} • ${data.changes.current} active holders`;
     }
     function formatNumber(num) {
-      if (num >= 1000000000) return (num / 1000000000).toFixed(2) + 'B';
-      else if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M';
-      else if (num >= 1000) return (num / 1000).toFixed(2) + 'K';
+      if (num >= 1000000000) return (num / 1000000000).toFixed(2) + 'B$';
+      else if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M$';
+      else if (num >= 1000) return (num / 1000).toFixed(2) + 'K$';
       else if (num >= 1) return num.toFixed(2);
       else return num.toFixed(6);
     }
-    function formatUSD(num) {
-      if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M';
-      else if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
-      else if (num >= 1) return num.toFixed(2);
-      else return num.toFixed(4);
+    function formatUSD(num, alwaysDollar) {
+      if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M$';
+      else if (num >= 1000) return (num / 1000).toFixed(1) + 'K$';
+      else if (num >= 1) return num.toFixed(2) + (alwaysDollar ? '$' : '');
+      else return num.toFixed(4) + (alwaysDollar ? '$' : '');
     }
     document.addEventListener('DOMContentLoaded', function() {
       document.getElementById('startedAt').textContent = '-';
@@ -581,6 +620,9 @@
       document.getElementById('unchanged').textContent = '-';
       document.getElementById('pollInterval').textContent = '1 second';
       document.getElementById('currentToken').textContent = 'SOL (example)';
+      // Start price polling every 5s even without scan
+      priceInterval = setInterval(fetchPricesOnly, 5000);
+      fetchPricesOnly();
     });
   </script>
 </body>
