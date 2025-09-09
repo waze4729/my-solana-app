@@ -11,7 +11,7 @@ const TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const JUP_MINT = "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN";
 const JUPITER_BATCH_SIZE = 49;
-const MAX_TOP_HOLDERS = 20;
+const MAX_TOP_HOLDERS = 50; // CHANGED FROM 20 TO 50
 const MAX_RETRIES = 2;
 const RETRY_BASE_DELAY = 1200;
 const TOKEN_META_CACHE_TTL_MIN = 180;
@@ -41,7 +41,7 @@ const storage = {
   prices: {
     SOL: 0,
     JUP: 0,
-    lastUpdated: null
+    lastUpdated: null,
   },
   topHoldersCache: {},
   walletTokenCache: {},
@@ -381,6 +381,8 @@ async function pollData() {
       if (cached && cached.amount === holder.amount) {
         valuableTokens = cached.valuableTokens;
       } else {
+        // Always update for most accurate tokens
+        await updateHolderValuableTokens(holder.owner);
         valuableTokens = await fetchHolderValuableTokens(holder.owner);
       }
       const holderData = { ...holder, valuableTokens };
