@@ -40,41 +40,28 @@ function getSecondsSinceStart() {
   return Math.floor(diffMs / 1000);
 }
 async function fetchPrices() {
+  if (!storage.tokenMint) return;
   try {
     const response = await fetch(
-      'https://lite-api.jup.ag/price/v3?ids=So11111111111111111111111111111111111111112,JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN'
+      `https://lite-api.jup.ag/price/v3?ids=${storage.tokenMint},So11111111111111111111111111111111111111112,JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN`
     );
     const data = await response.json();
-    if (data) {
-      // Store prices
-      const sol = data.So11111111111111111111111111111111111111112;
-      const jup = data.JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN;
-      storage.prices.SOL = parseFloat(sol?.usdPrice || 0);
-      storage.prices.JUP = parseFloat(jup?.usdPrice || 0);
-      storage.prices.SOL_decimals = sol?.decimals;
-      storage.prices.JUP_decimals = jup?.decimals;
-      storage.prices.SOL_24h = sol?.priceChange24h;
-      storage.prices.JUP_24h = jup?.priceChange24h;
-      storage.prices.lastUpdated = new Date();
-      console.log(
-        `Prices updated (v3) - SOL: $${storage.prices.SOL}, JUP: $${storage.prices.JUP}`
-      );
-    }
+    // Save all fetched prices keyed by mint
+    Object.keys(data).forEach(mint => {
+      storage.prices[mint] = parseFloat(data[mint]?.usdPrice || 0);
+    });
+    storage.prices.lastUpdated = new Date();
   } catch (error) {
     console.error('Error fetching prices:', error.message);
   }
 }
-// Calculate USD value based on token mint
 function calculateUSDValue(amount, tokenMint) {
-  if (tokenMint === 'So11111111111111111111111111111111111111112') {
-    return amount * storage.prices.SOL;
-  } else if (tokenMint === 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN') {
-    return amount * storage.prices.JUP;
+  const price = storage.prices[tokenMint];
+  if (price && amount) {
+    return amount * price;
   }
-  // For other tokens, we don't have price data yet
   return 0;
 }
-
 async function fetchAllTokenAccounts(mintAddress) {
   const mintPublicKey = new PublicKey(mintAddress);
   try {
@@ -350,4 +337,5 @@ app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Scan interval: 1 second`);
 });
+
 
