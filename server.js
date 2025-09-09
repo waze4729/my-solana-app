@@ -12,7 +12,7 @@ const TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const JUP_MINT = "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN";
 const JUPITER_BATCH_SIZE = 49; // <= 49 for safety
-const MAX_TOP_HOLDERS = 15;
+const MAX_TOP_HOLDERS = 20; // match UI and performance
 const MAX_RETRIES = 4;
 const RETRY_BASE_DELAY = 1800; // ms
 
@@ -39,35 +39,26 @@ const storage = {
     SOL: 0,
     JUP: 0,
     lastUpdated: null
-  }
+  },
+  topHoldersCache: {} // key: owner, value: { ...holder, valuableTokens }
 };
-
-// ------------- Utility Functions ------------------
 
 function getSecondsSinceStart() {
   if (!storage.startTime) return 0;
   const now = new Date();
   return Math.floor((now - storage.startTime) / 1000);
 }
-
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-
 function logError(...args) {
   console.error("==> [ERROR]", ...args);
 }
-
 function logInfo(...args) {
   console.log("==>", ...args);
 }
 
 // ----------- Robust Jupiter Price Fetching -------------
-
-/**
- * Fetches prices for an array of mints in batches, with rate limit, retry, and error handling.
- * Returns an object { [mint]: {usdPrice, ...}, ... }
- */
 async function fetchJupiterPricesBatched(mints, maxBatchSize = JUPITER_BATCH_SIZE) {
   let prices = {};
   for (let i = 0; i < mints.length; i += maxBatchSize) {
@@ -78,7 +69,6 @@ async function fetchJupiterPricesBatched(mints, maxBatchSize = JUPITER_BATCH_SIZ
       try {
         const url = JUPITER_API_URL + batch.join(",");
         const response = await fetch(url);
-        // Handle rate limit specifically
         if (!response.ok) {
           const body = await response.text();
           if (response.status === 429 || body.includes("Rate limit")) {
@@ -90,7 +80,6 @@ async function fetchJupiterPricesBatched(mints, maxBatchSize = JUPITER_BATCH_SIZ
           logError(`Jupiter API HTTP ${response.status} for batch:`, batch, "Body:", body);
           break;
         }
-        // Try to parse JSON, handle invalid JSON gracefully
         let priceData;
         try {
           priceData = await response.json();
@@ -98,7 +87,6 @@ async function fetchJupiterPricesBatched(mints, maxBatchSize = JUPITER_BATCH_SIZ
           logError(`Invalid JSON from Jupiter for batch:`, batch, err.message);
           break;
         }
-        // Merge
         prices = { ...prices, ...priceData };
         success = true;
       } catch (err) {
@@ -107,18 +95,15 @@ async function fetchJupiterPricesBatched(mints, maxBatchSize = JUPITER_BATCH_SIZ
         tries++;
       }
     }
-    // If after retries not successful, skip batch, log
     if (!success) {
       logError("[JUPITER] Failed to get prices for batch after retries:", batch);
     }
-    // Be nice to Jupiter and add a small delay between batches
     await sleep(250);
   }
   return prices;
 }
 
-// ------------- Price Fetching for Global Dashboard ------------
-
+// ------------- Price Fetching for Global Dashboard -------------
 async function fetchPrices() {
   if (!storage.tokenMint) return;
   try {
@@ -137,15 +122,11 @@ async function fetchPrices() {
     logError("fetchPrices:", error.message || error);
   }
 }
-
 function calculateUSDValue(amount, tokenMint) {
   const price = storage.prices[tokenMint];
   if (price && amount) return amount * price;
   return 0;
 }
-
-// ------------- SPL Token Account Fetching ------------
-
 async function fetchAllTokenAccounts(mintAddress) {
   const mintPublicKey = new PublicKey(mintAddress);
   try {
@@ -173,9 +154,7 @@ async function fetchAllTokenAccounts(mintAddress) {
     return [];
   }
 }
-
-// ----------------- Analysis Functions (Unchanged) ------------------
-
+// ----------------- Analysis Functions ------------------
 function makeStepBuckets() {
   const buckets = {};
   for (let pct = 10; pct <= 100; pct += 10) {
@@ -188,7 +167,6 @@ function makeStepBuckets() {
   buckets.total = 0;
   return buckets;
 }
-
 function analyze(registry, fresh) {
   const now = Date.now();
   const freshMap = new Map(fresh.map(h => [h.owner, h.amount]));
@@ -229,7 +207,6 @@ function analyze(registry, fresh) {
   }
   return changes;
 }
-
 async function analyzeTop50(fresh, initialTop50, initialTop50Amounts, previousTop50, previousTop50MinAmount) {
   if (!initialTop50 || initialTop50.length === 0) return null;
   const sorted = fresh.slice().sort((a, b) => b.amount - a.amount);
@@ -296,7 +273,7 @@ async function analyzeTop50(fresh, initialTop50, initialTop50Amounts, previousTo
   };
 }
 
-// ----------- Holder Valuable Tokens with Robust Fetch and Throttle -----------
+// ----------- Incremental Top Holder Valuable Tokens -----------
 
 async function fetchHolderValuableTokens(owner) {
   try {
@@ -334,8 +311,7 @@ async function fetchHolderValuableTokens(owner) {
   }
 }
 
-// ------------- Poll Data - Throttle Top Holder Processing ------------
-
+// ------------- Poll Data - Incremental Top Holder Valuable Tokens -------------
 async function pollData() {
   if (!storage.tokenMint || !storage.scanning) return;
   try {
@@ -348,7 +324,6 @@ async function pollData() {
       storage.previousTop50 = new Set(storage.initialTop50);
       storage.previousTop50MinAmount = sorted[49]?.amount || 0;
     }
-
     const changes = analyze(storage.registry, fresh);
     const top50Stats = await analyzeTop50(
       fresh,
@@ -358,19 +333,37 @@ async function pollData() {
       storage.previousTop50MinAmount
     );
 
-    // Top Holders: process serially with a delay to avoid bursts
+    // Only top 20 holders, incremental valuableTokens fetch and cache
     const topHoldersRaw = [...fresh].sort((a, b) => b.amount - a.amount).slice(0, MAX_TOP_HOLDERS);
+    const nowCache = {}; // for this poll round
+
     const topHolders = [];
     for (const holder of topHoldersRaw) {
-      try {
-        holder.valuableTokens = await fetchHolderValuableTokens(holder.owner);
-      } catch (err) {
-        holder.valuableTokens = [];
-        logError(`fetchHolderValuableTokens failed for ${holder.owner}:`, err.message || err);
+      let cached = storage.topHoldersCache[holder.owner];
+      if (cached && cached.amount === holder.amount) {
+        // Use cached data if no change (including valuableTokens if present)
+        topHolders.push(cached);
+        nowCache[holder.owner] = cached;
+        continue;
       }
-      topHolders.push(holder);
-      await sleep(250); // Throttle between holders
+      // Add a partial holder now (will be sent immediately)
+      const holderData = { ...holder, valuableTokens: cached?.valuableTokens || [] };
+      topHolders.push(holderData);
+      nowCache[holder.owner] = holderData;
+      // Fetch valuableTokens in background and update cache when ready
+      fetchHolderValuableTokens(holder.owner).then(tokens => {
+        holderData.valuableTokens = tokens;
+        nowCache[holder.owner] = holderData;
+        storage.topHoldersCache[holder.owner] = holderData;
+      }).catch(err => {
+        holderData.valuableTokens = [];
+        storage.topHoldersCache[holder.owner] = holderData;
+        logError(`fetchHolderValuableTokens failed for ${holder.owner}:`, err.message || err);
+      });
+      await sleep(100);
     }
+    // Clean up cache: remove non-top holders to avoid memory leak
+    storage.topHoldersCache = nowCache;
 
     storage.latestData = {
       fresh,
@@ -390,8 +383,7 @@ async function pollData() {
   }
 }
 
-// ------------- API Endpoints ------------
-
+// ------------- API Endpoints -------------
 app.post("/api/start", async (req, res) => {
   const { mint } = req.body;
   if (!mint) return res.status(400).send("Missing token mint");
@@ -404,6 +396,7 @@ app.post("/api/start", async (req, res) => {
   storage.allTimeNewTop50 = new Set();
   storage.scanning = true;
   storage.startTime = new Date();
+  storage.topHoldersCache = {};
   if (storage.pollInterval) clearInterval(storage.pollInterval);
   await fetchPrices();
   storage.pollInterval = setInterval(pollData, 1000);
