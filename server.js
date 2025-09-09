@@ -12,10 +12,12 @@ const SOL_MINT = "So11111111111111111111111111111111111111112";
 const JUP_MINT = "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN";
 const JUPITER_BATCH_SIZE = 49;
 const MAX_TOP_HOLDERS = 20;
-const MAX_RETRIES = 4;
-const RETRY_BASE_DELAY = 1800;
-const TOKEN_META_CACHE_TTL_MIN = 200;
-const TOKEN_META_CACHE_TTL_MAX = 300;
+const MAX_RETRIES = 2;
+const RETRY_BASE_DELAY = 1200;
+const TOKEN_META_CACHE_TTL_MIN = 180;
+const TOKEN_META_CACHE_TTL_MAX = 320;
+const SPL_SCAN_INTERVAL = 6000;
+
 const connection = new Connection(RPC_ENDPOINT, "confirmed");
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -34,6 +36,7 @@ const storage = {
   scanning: false,
   latestData: null,
   pollInterval: null,
+  splHoldingsInterval: null,
   startTime: null,
   prices: {
     SOL: 0,
@@ -43,13 +46,11 @@ const storage = {
   topHoldersCache: {},
   walletTokenCache: {},
   tokenMetaCache: {},
+  topHolderAddresses: [],
 };
 
 function getRandomTTL() {
-  return (
-    TOKEN_META_CACHE_TTL_MIN +
-    Math.floor(Math.random() * (TOKEN_META_CACHE_TTL_MAX - TOKEN_META_CACHE_TTL_MIN))
-  );
+  return TOKEN_META_CACHE_TTL_MIN + Math.floor(Math.random() * (TOKEN_META_CACHE_TTL_MAX - TOKEN_META_CACHE_TTL_MIN));
 }
 
 async function fetchTokenMeta(mint) {
@@ -63,32 +64,17 @@ async function fetchTokenMeta(mint) {
     const resp = await fetch(JUPITER_TOKENINFO_URL + mint);
     if (!resp.ok) throw new Error("Jupiter tokeninfo failed");
     const data = await resp.json();
-    const meta = {
-      name: data.name || "Unknown",
-      symbol: data.symbol || "",
-      logoURI: data.logoURI || null,
-      updatedAt: now,
-      ttl: getRandomTTL()
-    };
+    const meta = { name: data.name || "Unknown", symbol: data.symbol || "", logoURI: data.logoURI || null, updatedAt: now, ttl: getRandomTTL() };
     storage.tokenMetaCache[mint] = meta;
     return meta;
   } catch (err) {
-    storage.tokenMetaCache[mint] = {
-      name: "Unknown",
-      symbol: "",
-      logoURI: null,
-      updatedAt: now,
-      ttl: getRandomTTL()
-    };
+    storage.tokenMetaCache[mint] = { name: "Unknown", symbol: "", logoURI: null, updatedAt: now, ttl: getRandomTTL() };
     return storage.tokenMetaCache[mint];
   }
 }
-
 async function fetchTokenMetasParallel(mints) {
   const out = {};
-  await Promise.all(mints.map(async m => {
-    out[m] = await fetchTokenMeta(m);
-  }));
+  await Promise.all(mints.map(async m => { out[m] = await fetchTokenMeta(m); }));
   return out;
 }
 
@@ -120,10 +106,8 @@ async function fetchJupiterPricesBatched(mints, maxBatchSize = JUPITER_BATCH_SIZ
         if (!response.ok) {
           const body = await response.text();
           if (response.status === 429 || body.includes("Rate limit")) {
-            logError(`[JUPITER RATE LIMIT] HTTP 429 or rate-limit on batch:`, batch, `Retry in ${RETRY_BASE_DELAY * (tries + 1)}ms`);
-            await sleep(RETRY_BASE_DELAY * (tries + 1));
-            tries++;
-            continue;
+            logError(`[JUPITER RATE LIMIT] HTTP 429 or rate-limit on batch:`, batch, `Skip updating SPL tokens for now`);
+            break;
           }
           logError(`Jupiter API HTTP ${response.status} for batch:`, batch, "Body:", body);
           break;
@@ -139,14 +123,10 @@ async function fetchJupiterPricesBatched(mints, maxBatchSize = JUPITER_BATCH_SIZ
         success = true;
       } catch (err) {
         logError(`Jupiter fetch error for batch:`, batch, err.message || err);
-        await sleep(RETRY_BASE_DELAY * (tries + 1));
-        tries++;
+        break;
       }
     }
-    if (!success) {
-      logError("[JUPITER] Failed to get prices for batch after retries:", batch);
-    }
-    await sleep(150);
+    await sleep(100);
   }
   return prices;
 }
@@ -164,7 +144,6 @@ async function fetchPrices() {
       storage.prices[mint] = parseFloat(prices[mint]?.usdPrice || 0);
     });
     storage.prices.lastUpdated = new Date();
-    logInfo("Fetched prices:", storage.prices);
   } catch (error) {
     logError("fetchPrices:", error.message || error);
   }
@@ -275,17 +254,8 @@ async function analyzeTop50(fresh, initialTop50, initialTop50Amounts, previousTo
   const stillInTop50 = initialTop50.filter(owner => currentTop50.includes(owner));
   const goneFromInitialTop50 = initialTop50.filter(owner => !currentTop50.includes(owner));
   const newInTop50 = currentTop50.filter(owner => !initialTop50.includes(owner));
-  const top50Sales = {
-    sold100: 0,
-    sold50: 0,
-    sold25: 0,
-  };
-  const top50Buys = {
-    bought100: 0,
-    bought50: 0,
-    bought25: 0,
-    bought10: 0,
-  };
+  const top50Sales = { sold100: 0, sold50: 0, sold25: 0, };
+  const top50Buys = { bought100: 0, bought50: 0, bought25: 0, bought10: 0, };
   for (const owner of initialTop50) {
     const initialAmount = initialTop50Amounts.get(owner);
     const currentAmount = currentTop50Map.get(owner) || 0;
@@ -353,7 +323,6 @@ async function updateHolderValuableTokens(owner) {
       return { mint, amount };
     }).filter(t => t.amount > 0);
   } catch (e) {
-    logError("updateHolderValuableTokens:", e.message || e);
     return;
   }
   const uniqueMints = [...new Set(tokens.map(t => t.mint))];
@@ -387,7 +356,6 @@ async function pollData() {
   if (!storage.tokenMint || !storage.scanning) return;
   try {
     const fresh = await fetchAllTokenAccounts(storage.tokenMint);
-
     if (!storage.initialTop50) {
       const sorted = fresh.slice().sort((a, b) => b.amount - a.amount);
       storage.initialTop50 = sorted.slice(0, 50).map(h => h.owner);
@@ -404,6 +372,7 @@ async function pollData() {
       storage.previousTop50MinAmount
     );
     const topHoldersRaw = [...fresh].sort((a, b) => b.amount - a.amount).slice(0, MAX_TOP_HOLDERS);
+    storage.topHolderAddresses = topHoldersRaw.map(h => h.owner);
     const nowCache = {};
     const topHolders = [];
     for (const holder of topHoldersRaw) {
@@ -419,7 +388,6 @@ async function pollData() {
       nowCache[holder.owner] = holderData;
     }
     storage.topHoldersCache = nowCache;
-
     storage.latestData = {
       fresh,
       registry: storage.registry,
@@ -432,14 +400,14 @@ async function pollData() {
       tokenMint: storage.tokenMint,
       topHolders
     };
-    logInfo(`Scan completed: ${changes.current} holders`);
+  } catch {}
+}
 
-    topHoldersRaw.forEach(holder => {
-      updateHolderValuableTokens(holder.owner)
-        .catch(e => logError("background updateHolderValuableTokens failed:", e));
-    });
-  } catch (error) {
-    logError("pollData:", error.message || error);
+async function pollTopHolderSplTokens() {
+  if (!storage.tokenMint || !storage.scanning || !storage.topHolderAddresses.length) return;
+  for (const owner of storage.topHolderAddresses) {
+    await updateHolderValuableTokens(owner);
+    await sleep(350);
   }
 }
 
@@ -456,11 +424,14 @@ app.post("/api/start", async (req, res) => {
   storage.scanning = true;
   storage.startTime = new Date();
   storage.topHoldersCache = {};
+  storage.topHolderAddresses = [];
   if (storage.pollInterval) clearInterval(storage.pollInterval);
+  if (storage.splHoldingsInterval) clearInterval(storage.splHoldingsInterval);
   await fetchPrices();
   storage.pollInterval = setInterval(pollData, 1000);
   setInterval(fetchPrices, 30000);
   pollData();
+  storage.splHoldingsInterval = setInterval(pollTopHolderSplTokens, SPL_SCAN_INTERVAL);
   res.send("Scan started - polling every 1 second");
 });
 
@@ -469,6 +440,10 @@ app.post("/api/stop", (req, res) => {
   if (storage.pollInterval) {
     clearInterval(storage.pollInterval);
     storage.pollInterval = null;
+  }
+  if (storage.splHoldingsInterval) {
+    clearInterval(storage.splHoldingsInterval);
+    storage.splHoldingsInterval = null;
   }
   res.send("Scan stopped");
 });
@@ -490,5 +465,4 @@ app.get("/api/status", (req, res) => {
 
 app.listen(PORT, () => {
   logInfo(`Server running on port ${PORT}`);
-  logInfo(`Scan interval: 1 second`);
 });
