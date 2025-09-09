@@ -4,8 +4,6 @@ import * as web3 from "@solana/web3.js";
 import fetch from "node-fetch";
 
 const { Connection, PublicKey } = web3;
-
-// === CONFIG ===
 const RPC_ENDPOINT = "https://mainnet.helius-rpc.com/?api-key=07ed88b0-3573-4c79-8d62-3a2cbd5c141a";
 const JUPITER_API_URL = "https://lite-api.jup.ag/price/v3?ids=";
 const JUPITER_TOKENINFO_URL = "https://lite-api.jup.ag/tokens/v1/token/";
@@ -18,7 +16,6 @@ const MAX_RETRIES = 4;
 const RETRY_BASE_DELAY = 1800;
 const TOKEN_META_CACHE_TTL_MIN = 200;
 const TOKEN_META_CACHE_TTL_MAX = 300;
-
 const connection = new Connection(RPC_ENDPOINT, "confirmed");
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -55,7 +52,6 @@ function getRandomTTL() {
   );
 }
 
-// ----------- Token Info Fetch & Cache using Jupiter API (logo, name, symbol) -----------
 async function fetchTokenMeta(mint) {
   if (!mint) return { name: "Unknown", symbol: "", logoURI: null };
   const cached = storage.tokenMetaCache[mint];
@@ -96,7 +92,6 @@ async function fetchTokenMetasParallel(mints) {
   return out;
 }
 
-// -------------- Utility ---------------
 function getSecondsSinceStart() {
   if (!storage.startTime) return 0;
   const now = new Date();
@@ -112,7 +107,6 @@ function logInfo(...args) {
   console.log("==>", ...args);
 }
 
-// ----------- Robust Jupiter Price Fetching -------------
 async function fetchJupiterPricesBatched(mints, maxBatchSize = JUPITER_BATCH_SIZE) {
   let prices = {};
   for (let i = 0; i < mints.length; i += maxBatchSize) {
@@ -210,7 +204,6 @@ async function fetchAllTokenAccounts(mintAddress) {
   }
 }
 
-// ----------------- Analysis Functions ------------------
 function makeStepBuckets() {
   const buckets = {};
   for (let pct = 10; pct <= 100; pct += 10) {
@@ -329,12 +322,10 @@ async function analyzeTop50(fresh, initialTop50, initialTop50Amounts, previousTo
   };
 }
 
-// ----------- Top 50 Only: SPL Holdings for Top Holders Only -----------
 async function fetchHolderValuableTokens(owner) {
   const now = Date.now();
   if (!storage.walletTokenCache[owner]) storage.walletTokenCache[owner] = {};
   const cache = storage.walletTokenCache[owner];
-  // Only use cache; never fetch new data unless idle (done async after scan)
   const validTokens = [];
   for (const [mint, entry] of Object.entries(cache)) {
     if (now - entry.updatedAt < entry.ttl * 1000) {
@@ -392,7 +383,6 @@ async function updateHolderValuableTokens(owner) {
   }
 }
 
-// ------------- Poll Data - Main scan is top priority -------------
 async function pollData() {
   if (!storage.tokenMint || !storage.scanning) return;
   try {
@@ -413,11 +403,8 @@ async function pollData() {
       storage.previousTop50,
       storage.previousTop50MinAmount
     );
-
-    // Only for top 50 holders SPL tokens
     const topHoldersRaw = [...fresh].sort((a, b) => b.amount - a.amount).slice(0, MAX_TOP_HOLDERS);
     const nowCache = {};
-
     const topHolders = [];
     for (const holder of topHoldersRaw) {
       let cached = storage.topHoldersCache[holder.owner];
@@ -425,7 +412,7 @@ async function pollData() {
       if (cached && cached.amount === holder.amount) {
         valuableTokens = cached.valuableTokens;
       } else {
-        valuableTokens = await fetchHolderValuableTokens(holder.owner); // CACHE ONLY
+        valuableTokens = await fetchHolderValuableTokens(holder.owner);
       }
       const holderData = { ...holder, valuableTokens };
       topHolders.push(holderData);
@@ -447,7 +434,6 @@ async function pollData() {
     };
     logInfo(`Scan completed: ${changes.current} holders`);
 
-    // Background: update all top holder caches (non-blocking, not in scan loop) ONLY FOR TOP50
     topHoldersRaw.forEach(holder => {
       updateHolderValuableTokens(holder.owner)
         .catch(e => logError("background updateHolderValuableTokens failed:", e));
@@ -457,7 +443,6 @@ async function pollData() {
   }
 }
 
-// ------------- API Endpoints -------------
 app.post("/api/start", async (req, res) => {
   const { mint } = req.body;
   if (!mint) return res.status(400).send("Missing token mint");
@@ -471,7 +456,6 @@ app.post("/api/start", async (req, res) => {
   storage.scanning = true;
   storage.startTime = new Date();
   storage.topHoldersCache = {};
-  // Don't clear walletTokenCache: keep as much as possible for performance!
   if (storage.pollInterval) clearInterval(storage.pollInterval);
   await fetchPrices();
   storage.pollInterval = setInterval(pollData, 1000);
