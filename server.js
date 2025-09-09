@@ -5,19 +5,18 @@ import fetch from "node-fetch";
 
 const { Connection, PublicKey } = web3;
 const RPC_ENDPOINT = "https://mainnet.helius-rpc.com/?api-key=07ed88b0-3573-4c79-8d62-3a2cbd5c141a";
-const JUPITER_API_URL_V3 = "https://lite-api.jup.ag/price/v3?ids=";
-const JUPITER_API_URL_V2 = "https://lite-api.jup.ag/price/v2?ids=";
-const JUPITER_TOKENINFO_URL = "https://lite-api.jup.ag/tokens/v1/";
+const JUPITER_API_URL = "https://lite-api.jup.ag/price/v3?ids=";
+const JUPITER_TOKENINFO_URL = "https://lite-api.jup.ag/tokens/v1/token/";
 const TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const JUP_MINT = "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN";
-const JUPITER_BATCH_SIZE = 12; // Lower batch size helps avoid Jupiter rate limit
+const JUPITER_BATCH_SIZE = 49;
 const MAX_TOP_HOLDERS = 20;
-const MAX_RETRIES = 5;
-const RETRY_BASE_DELAY = 1500; // ms
+const MAX_RETRIES = 2;
+const RETRY_BASE_DELAY = 1200;
 const TOKEN_META_CACHE_TTL_MIN = 180;
 const TOKEN_META_CACHE_TTL_MAX = 320;
-const SPL_SCAN_INTERVAL = 9000;
+const SPL_SCAN_INTERVAL = 6000;
 
 const connection = new Connection(RPC_ENDPOINT, "confirmed");
 const app = express();
@@ -40,74 +39,43 @@ const storage = {
   splHoldingsInterval: null,
   startTime: null,
   prices: {
+    SOL: 0,
+    JUP: 0,
     lastUpdated: null
   },
   topHoldersCache: {},
   walletTokenCache: {},
   tokenMetaCache: {},
   topHolderAddresses: [],
-  priceCache: {} // { mint: { price, ts } }
 };
 
 function getRandomTTL() {
   return TOKEN_META_CACHE_TTL_MIN + Math.floor(Math.random() * (TOKEN_META_CACHE_TTL_MAX - TOKEN_META_CACHE_TTL_MIN));
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function logError(...args) {
-  console.error("==> [ERROR]", ...args);
-}
-
-function logInfo(...args) {
-  console.log("==>", ...args);
-}
-
-async function fetchTokenMetasBatch(mints) {
+async function fetchTokenMeta(mint) {
+  if (!mint) return { name: "Unknown", symbol: "", logoURI: null };
+  const cached = storage.tokenMetaCache[mint];
   const now = Date.now();
-  const mintsToFetch = [];
-  const results = {};
-  for (const mint of mints) {
-    const cached = storage.tokenMetaCache[mint];
-    if (cached && now - cached.updatedAt < cached.ttl * 1000) {
-      results[mint] = cached;
-    } else {
-      mintsToFetch.push(mint);
-    }
+  if (cached && now - cached.updatedAt < cached.ttl * 1000) {
+    return cached;
   }
-  if (mintsToFetch.length > 0) {
-    try {
-      const response = await fetch(JUPITER_TOKENINFO_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mints: mintsToFetch })
-      });
-      if (response.ok) {
-        const data = await response.json();
-        for (const mint of mintsToFetch) {
-          const tokenData = data[mint] || {};
-          const meta = { 
-            name: tokenData.name || "Unknown", 
-            symbol: tokenData.symbol || "", 
-            logoURI: tokenData.logoURI || null, 
-            updatedAt: now, 
-            ttl: getRandomTTL() 
-          };
-          storage.tokenMetaCache[mint] = meta;
-          results[mint] = meta;
-        }
-      }
-    } catch (err) {}
-    for (const mint of mintsToFetch) {
-      if (!results[mint]) {
-        results[mint] = { name: "Unknown", symbol: "", logoURI: null, updatedAt: now, ttl: getRandomTTL() };
-        storage.tokenMetaCache[mint] = results[mint];
-      }
-    }
+  try {
+    const resp = await fetch(JUPITER_TOKENINFO_URL + mint);
+    if (!resp.ok) throw new Error("Jupiter tokeninfo failed");
+    const data = await resp.json();
+    const meta = { name: data.name || "Unknown", symbol: data.symbol || "", logoURI: data.logoURI || null, updatedAt: now, ttl: getRandomTTL() };
+    storage.tokenMetaCache[mint] = meta;
+    return meta;
+  } catch (err) {
+    storage.tokenMetaCache[mint] = { name: "Unknown", symbol: "", logoURI: null, updatedAt: now, ttl: getRandomTTL() };
+    return storage.tokenMetaCache[mint];
   }
-  return results;
+}
+async function fetchTokenMetasParallel(mints) {
+  const out = {};
+  await Promise.all(mints.map(async m => { out[m] = await fetchTokenMeta(m); }));
+  return out;
 }
 
 function getSecondsSinceStart() {
@@ -115,47 +83,47 @@ function getSecondsSinceStart() {
   const now = new Date();
   return Math.floor((now - storage.startTime) / 1000);
 }
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+function logError(...args) {
+  console.error("==> [ERROR]", ...args);
+}
+function logInfo(...args) {
+  console.log("==>", ...args);
+}
 
 async function fetchJupiterPricesBatched(mints, maxBatchSize = JUPITER_BATCH_SIZE) {
   let prices = {};
-  const now = Date.now();
-  const uncached = [];
-  for (const mint of mints) {
-    const cached = storage.priceCache[mint];
-    if (cached && now - cached.ts < 30000) {
-      prices[mint] = { usdPrice: cached.price, price: cached.price };
-    } else {
-      uncached.push(mint);
-    }
-  }
-  for (let i = 0; i < uncached.length; i += maxBatchSize) {
-    const batch = uncached.slice(i, i + maxBatchSize);
-    let tries = 0, success = false;
+  for (let i = 0; i < mints.length; i += maxBatchSize) {
+    const batch = mints.slice(i, i + maxBatchSize);
+    let tries = 0;
+    let success = false;
     while (tries < MAX_RETRIES && !success) {
       try {
-        const url = JUPITER_API_URL_V3 + batch.join(",");
+        const url = JUPITER_API_URL + batch.join(",");
         const response = await fetch(url);
-        if (response.status === 429) {
-          logInfo("Rate limited on V3, trying V2 for batch");
-          await sleep(RETRY_BASE_DELAY * (tries + 1));
-          tries++;
-          continue;
-        }
         if (!response.ok) {
-          logError("Jupiter V3 API HTTP", response.status, batch);
+          const body = await response.text();
+          if (response.status === 429 || body.includes("Rate limit")) {
+            logError(`[JUPITER RATE LIMIT] HTTP 429 or rate-limit on batch:`, batch, `Skip updating SPL tokens for now`);
+            break;
+          }
+          logError(`Jupiter API HTTP ${response.status} for batch:`, batch, "Body:", body);
           break;
         }
-        let priceData = await response.json();
-        if (priceData.data) {
-          Object.keys(priceData.data).forEach(mint => {
-            prices[mint] = { usdPrice: priceData.data[mint].price, price: priceData.data[mint].price };
-            storage.priceCache[mint] = { price: priceData.data[mint].price, ts: Date.now() };
-          });
+        let priceData;
+        try {
+          priceData = await response.json();
+        } catch (err) {
+          logError(`Invalid JSON from Jupiter for batch:`, batch, err.message);
+          break;
         }
+        prices = { ...prices, ...priceData };
         success = true;
       } catch (err) {
-        tries++;
-        await sleep(RETRY_BASE_DELAY * (tries + 1));
+        logError(`Jupiter fetch error for batch:`, batch, err.message || err);
+        break;
       }
     }
     await sleep(100);
@@ -175,7 +143,7 @@ async function fetchPrices() {
     Object.keys(prices).forEach(mint => {
       storage.prices[mint] = parseFloat(prices[mint]?.usdPrice || 0);
     });
-    storage.prices.lastUpdated = new Date().toISOString();
+    storage.prices.lastUpdated = new Date();
   } catch (error) {
     logError("fetchPrices:", error.message || error);
   }
@@ -227,7 +195,6 @@ function makeStepBuckets() {
   buckets.total = 0;
   return buckets;
 }
-
 function analyze(registry, fresh) {
   const now = Date.now();
   const freshMap = new Map(fresh.map(h => [h.owner, h.amount]));
@@ -268,7 +235,6 @@ function analyze(registry, fresh) {
   }
   return changes;
 }
-
 async function analyzeTop50(fresh, initialTop50, initialTop50Amounts, previousTop50, previousTop50MinAmount) {
   if (!initialTop50 || initialTop50.length === 0) return null;
   const sorted = fresh.slice().sort((a, b) => b.amount - a.amount);
@@ -338,67 +304,51 @@ async function fetchHolderValuableTokens(owner) {
   }
   return validTokens.sort((a, b) => b.usdValue - a.usdValue);
 }
-
-async function updateAllHoldersValuableTokens(owners) {
-  if (!owners || owners.length === 0) return;
-  const allTokens = [];
-  const ownerTokenMap = new Map();
-  for (const owner of owners) {
-    try {
-      const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
-        new PublicKey(owner),
-        { programId: new PublicKey(TOKEN_PROGRAM_ID) }
-      );
-      const tokens = tokenAccounts.value.map(acc => {
-        const parsed = acc.account.data.parsed;
-        const info = parsed.info;
-        const mint = info.mint;
-        const decimals = info.tokenAmount.decimals;
-        const amount = Number(info.tokenAmount.amount) / Math.pow(10, decimals);
-        return { owner, mint, amount };
-      }).filter(t => t.amount > 0);
-      allTokens.push(...tokens);
-      if (!ownerTokenMap.has(owner)) {
-        ownerTokenMap.set(owner, []);
-      }
-      ownerTokenMap.get(owner).push(...tokens);
-    } catch (e) {
-      logError(`Error fetching tokens for owner ${owner}:`, e.message);
-    }
-    await sleep(100);
+async function updateHolderValuableTokens(owner) {
+  const now = Date.now();
+  if (!storage.walletTokenCache[owner]) storage.walletTokenCache[owner] = {};
+  const cache = storage.walletTokenCache[owner];
+  let tokens;
+  try {
+    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+      new PublicKey(owner),
+      { programId: new PublicKey(TOKEN_PROGRAM_ID) }
+    );
+    tokens = tokenAccounts.value.map(acc => {
+      const parsed = acc.account.data.parsed;
+      const info = parsed.info;
+      const mint = info.mint;
+      const decimals = info.tokenAmount.decimals;
+      const amount = Number(info.tokenAmount.amount) / Math.pow(10, decimals);
+      return { mint, amount };
+    }).filter(t => t.amount > 0);
+  } catch (e) {
+    return;
   }
-  const uniqueMints = [...new Set(allTokens.map(t => t.mint))];
+  const uniqueMints = [...new Set(tokens.map(t => t.mint))];
   let prices = {};
   let tokenMetas = {};
-  if (uniqueMints.length > 0) {
+  if (uniqueMints.length) {
     prices = await fetchJupiterPricesBatched(uniqueMints, JUPITER_BATCH_SIZE);
-    tokenMetas = await fetchTokenMetasBatch(uniqueMints);
+    tokenMetas = await fetchTokenMetasParallel(uniqueMints);
   }
-  const now = Date.now();
-  for (const [owner, tokens] of ownerTokenMap.entries()) {
-    if (!storage.walletTokenCache[owner]) storage.walletTokenCache[owner] = {};
-    const cache = storage.walletTokenCache[owner];
-    const valTokens = [];
-    for (const token of tokens) {
-      const price = prices[token.mint]?.usdPrice;
-      if (!price) continue;
-      const meta = tokenMetas[token.mint] || { name: "Unknown", symbol: "", logoURI: null };
-      const usdValue = token.amount * price;
-      if (usdValue > 500) {
-        valTokens.push({
-          mint: token.mint,
+  for (const t of tokens) {
+    const price = prices[t.mint]?.usdPrice;
+    if (!price) continue;
+    const meta = tokenMetas[t.mint] || { name: "Unknown", symbol: "", logoURI: null };
+    const usdValue = t.amount * price;
+    if (usdValue > 500) {
+      cache[t.mint] = {
+        valuableTokens: [{
           name: meta.name,
           symbol: meta.symbol,
           logoURI: meta.logoURI,
           usdValue,
-        });
-      }
+        }],
+        updatedAt: now,
+        ttl: getRandomTTL()
+      };
     }
-    cache["valuable"] = {
-      valuableTokens: valTokens,
-      updatedAt: now,
-      ttl: getRandomTTL()
-    };
   }
 }
 
@@ -427,14 +377,15 @@ async function pollData() {
     const topHolders = [];
     for (const holder of topHoldersRaw) {
       let cached = storage.topHoldersCache[holder.owner];
-      let valuableTokens = [];
+      let valuableTokens;
       if (cached && cached.amount === holder.amount) {
         valuableTokens = cached.valuableTokens;
       } else {
         valuableTokens = await fetchHolderValuableTokens(holder.owner);
       }
-      topHolders.push({ ...holder, valuableTokens });
-      nowCache[holder.owner] = { ...holder, valuableTokens };
+      const holderData = { ...holder, valuableTokens };
+      topHolders.push(holderData);
+      nowCache[holder.owner] = holderData;
     }
     storage.topHoldersCache = nowCache;
     storage.latestData = {
@@ -449,14 +400,15 @@ async function pollData() {
       tokenMint: storage.tokenMint,
       topHolders
     };
-  } catch (error) {
-    logError("pollData error:", error.message || error);
-  }
+  } catch {}
 }
 
 async function pollTopHolderSplTokens() {
   if (!storage.tokenMint || !storage.scanning || !storage.topHolderAddresses.length) return;
-  await updateAllHoldersValuableTokens(storage.topHolderAddresses);
+  for (const owner of storage.topHolderAddresses) {
+    await updateHolderValuableTokens(owner);
+    await sleep(350);
+  }
 }
 
 app.post("/api/start", async (req, res) => {
