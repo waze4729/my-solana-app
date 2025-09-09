@@ -565,20 +565,24 @@
       <div class="info-item">Token: <strong id="currentToken">-</strong></div>
     </div>
     
-    <div class="price-info">
-      <div class="price-item">
-        <span>SOL:</span>
-        <span class="price-value" id="solPrice">$0.00</span>
-      </div>
-      <div class="price-item">
-        <span>JUP:</span>
-        <span class="price-value" id="jupPrice">$0.00</span>
-      </div>
-      <div class="price-item">
-        <span>Last Updated:</span>
-        <span id="priceUpdated">-</span>
-      </div>
-    </div>
+<div class="price-info">
+  <div class="price-item">
+    <span id="tokenSymbol">Token:</span>
+    <span class="price-value" id="tokenPrice">$0.00</span>
+  </div>
+  <div class="price-item">
+    <span>SOL:</span>
+    <span class="price-value" id="solPrice">$0.00</span>
+  </div>
+  <div class="price-item">
+    <span>JUP:</span>
+    <span class="price-value" id="jupPrice">$0.00</span>
+  </div>
+  <div class="price-item">
+    <span>Last Updated:</span>
+    <span id="priceUpdated">-</span>
+  </div>
+</div>
     
     <div class="controls">
       <input type="text" id="mint" placeholder="Enter token mint address (SOL/JUP supported)" value="So11111111111111111111111111111111111111112">
@@ -739,18 +743,32 @@
         `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
     }
     
-    function updatePrices(prices) {
-      if (prices) {
-        currentPrices = prices;
-        document.getElementById('solPrice').textContent = `${prices.SOL.toFixed(2)}`;
-        document.getElementById('jupPrice').textContent = `${prices.JUP.toFixed(4)}`;
-        
-        if (prices.lastUpdated) {
-          const lastUpdated = new Date(prices.lastUpdated);
-          document.getElementById('priceUpdated').textContent = lastUpdated.toLocaleTimeString();
-        }
-      }
-    }
+function updatePrices(data) {
+  let symbol = "Token";
+  if (data.tokenMint === "So11111111111111111111111111111111111111112") symbol = "SOL";
+  else if (data.tokenMint === "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN") symbol = "JUP";
+  else if (data.tokenMint) symbol = data.tokenMint.substring(0, 4) + "..." + data.tokenMint.substring(data.tokenMint.length - 4);
+
+  document.getElementById('tokenSymbol').textContent = symbol + ":";
+  document.getElementById('tokenPrice').textContent = data.currentTokenPrice ? `$${data.currentTokenPrice.toFixed(4)}` : "$0.00";
+  document.getElementById('solPrice').textContent = data.solPrice ? `$${data.solPrice.toFixed(2)}` : "$0.00";
+  document.getElementById('jupPrice').textContent = data.jupPrice ? `$${data.jupPrice.toFixed(4)}` : "$0.0000";
+
+  if (data.prices && data.prices.lastUpdated) {
+    const lastUpdated = new Date(data.prices.lastUpdated);
+    document.getElementById('priceUpdated').textContent = timeAgo(lastUpdated);
+  }
+}
+
+function timeAgo(date) {
+  const now = new Date();
+  const diff = Math.floor((now - date) / 1000); // in seconds
+  if (diff < 5) return "just now";
+  if (diff < 60) return `${diff} seconds ago`;
+  if (diff < 3600) return `${Math.floor(diff/60)} minutes ago`;
+  if (diff < 86400) return `${Math.floor(diff/3600)} hours ago`;
+  return date.toLocaleString();
+}
     
     function fetchStatus() {
       if (!isScanning) return;
@@ -962,3 +980,4 @@
   </script>
 </body>
 </html>
+
