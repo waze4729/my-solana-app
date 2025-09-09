@@ -12,12 +12,12 @@ const TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const JUP_MINT = "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN";
 const JUPITER_BATCH_SIZE = 49;
-const MAX_TOP_HOLDERS = 20;
+const MAX_TOP_HOLDERS = 50;
 const MAX_RETRIES = 2;
 const RETRY_BASE_DELAY = 1200;
-const TOKEN_META_CACHE_TTL_MIN = 180;
+const TOKEN_META_CACHE_TTL_MIN = 18;
 const TOKEN_META_CACHE_TTL_MAX = 320;
-const SPL_SCAN_INTERVAL = 6000;
+const SPL_SCAN_INTERVAL = 1000;
 
 const connection = new Connection(RPC_ENDPOINT, "confirmed");
 const app = express();
@@ -599,3 +599,4 @@ app.get("/api/status", (req, res) => {
 app.listen(PORT, () => {
   logInfo(`Server running on port ${PORT}`);
 });
+
