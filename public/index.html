@@ -568,15 +568,15 @@
 <div class="price-info">
   <div class="price-item">
     <span id="tokenSymbol">Token:</span>
-    <span class="price-value" id="tokenPrice">$0.00</span>
+    <span class="price-value" id="tokenPrice">0.00$</span>
   </div>
   <div class="price-item">
     <span>SOL:</span>
-    <span class="price-value" id="solPrice">$0.00</span>
+    <span class="price-value" id="solPrice">0.00$</span>
   </div>
   <div class="price-item">
     <span>JUP:</span>
-    <span class="price-value" id="jupPrice">$0.00</span>
+    <span class="price-value" id="jupPrice">0.00$</span>
   </div>
   <div class="price-item">
     <span>Last Updated:</span>
@@ -748,12 +748,10 @@ function updatePrices(data) {
   if (data.tokenMint === "So11111111111111111111111111111111111111112") symbol = "SOL";
   else if (data.tokenMint === "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN") symbol = "JUP";
   else if (data.tokenMint) symbol = data.tokenMint.substring(0, 4) + "..." + data.tokenMint.substring(data.tokenMint.length - 4);
-
   document.getElementById('tokenSymbol').textContent = symbol + ":";
-  document.getElementById('tokenPrice').textContent = data.currentTokenPrice ? `$${data.currentTokenPrice.toFixed(4)}` : "$0.00";
-  document.getElementById('solPrice').textContent = data.solPrice ? `$${data.solPrice.toFixed(2)}` : "$0.00";
-  document.getElementById('jupPrice').textContent = data.jupPrice ? `$${data.jupPrice.toFixed(4)}` : "$0.0000";
-
+  document.getElementById('tokenPrice').textContent = data.currentTokenPrice ? `${data.currentTokenPrice.toFixed(4)}$` : "0.00$";
+  document.getElementById('solPrice').textContent = data.solPrice ? `${data.solPrice.toFixed(2)}$` : "0.00$";
+  document.getElementById('jupPrice').textContent = data.jupPrice ? `${data.jupPrice.toFixed(4)}$` : "0.0000$";
   if (data.prices && data.prices.lastUpdated) {
     const lastUpdated = new Date(data.prices.lastUpdated);
     document.getElementById('priceUpdated').textContent = timeAgo(lastUpdated);
@@ -980,4 +978,5 @@ function timeAgo(date) {
   </script>
 </body>
 </html>
+
 
