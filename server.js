@@ -8,13 +8,14 @@ const { Connection, PublicKey } = web3;
 // CONFIG
 const RPC_ENDPOINT = "https://mainnet.helius-rpc.com/?api-key=07ed88b0-3573-4c79-8d62-3a2cbd5c141a";
 const JUPITER_API_URL = "https://lite-api.jup.ag/price/v3?ids=";
+const JUPITER_TOKENINFO_URL = "https://lite-api.jup.ag/tokens/v1/token/";
 const TOKEN_PROGRAM_ID = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA";
 const SOL_MINT = "So11111111111111111111111111111111111111112";
 const JUP_MINT = "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN";
-const JUPITER_BATCH_SIZE = 49; // <= 49 for safety
-const MAX_TOP_HOLDERS = 20; // match UI and performance
+const JUPITER_BATCH_SIZE = 49;
+const MAX_TOP_HOLDERS = 20;
 const MAX_RETRIES = 4;
-const RETRY_BASE_DELAY = 1800; // ms
+const RETRY_BASE_DELAY = 1800;
 
 const connection = new Connection(RPC_ENDPOINT, "confirmed");
 const app = express();
@@ -40,27 +41,39 @@ const storage = {
     JUP: 0,
     lastUpdated: null
   },
-  topHoldersCache: {}
+  topHoldersCache: {},
+  tokenMetaCache: {} // mint -> { name, logoURI, symbol }
 };
 
-// ----------- Load SPL Token List (name & logoURI) -----------
-let SPL_TOKEN_MAP = new Map();
-let SPL_TOKEN_LOGO_MAP = new Map();
-(async () => {
+// ----------- Token Info Fetch & Cache using Jupiter API (logo, name, symbol) -----------
+async function fetchTokenMeta(mint) {
+  if (!mint) return { name: "Unknown", symbol: "", logoURI: null };
+  if (storage.tokenMetaCache[mint]) return storage.tokenMetaCache[mint];
   try {
-    const resp = await fetch(
-      "https://cdn.jsdelivr.net/gh/solana-labs/token-list@main/src/tokens/solana.tokenlist.json"
-    );
-    const { tokens } = await resp.json();
-    for (const t of tokens) {
-      SPL_TOKEN_MAP.set(t.address, t.name);
-      SPL_TOKEN_LOGO_MAP.set(t.address, t.logoURI);
-    }
-    console.log("Loaded Solana token list, tokens:", SPL_TOKEN_MAP.size);
+    const resp = await fetch(JUPITER_TOKENINFO_URL + mint);
+    if (!resp.ok) throw new Error("Jupiter tokeninfo failed");
+    const data = await resp.json();
+    const meta = {
+      name: data.name || "Unknown",
+      symbol: data.symbol || "",
+      logoURI: data.logoURI || null
+    };
+    storage.tokenMetaCache[mint] = meta;
+    return meta;
   } catch (err) {
-    console.error("Could not load SPL token list:", err);
+    storage.tokenMetaCache[mint] = { name: "Unknown", symbol: "", logoURI: null };
+    return { name: "Unknown", symbol: "", logoURI: null };
   }
-})();
+}
+
+async function fetchTokenMetasParallel(mints) {
+  // Returns: {mint: {name,symbol,logoURI}}
+  const out = {};
+  await Promise.all(mints.map(async m => {
+    out[m] = await fetchTokenMeta(m);
+  }));
+  return out;
+}
 
 // ------------------ Utility Functions ------------------
 function getSecondsSinceStart() {
@@ -118,7 +131,7 @@ async function fetchJupiterPricesBatched(mints, maxBatchSize = JUPITER_BATCH_SIZ
     if (!success) {
       logError("[JUPITER] Failed to get prices for batch after retries:", batch);
     }
-    await sleep(250);
+    await sleep(150);
   }
   return prices;
 }
@@ -174,6 +187,7 @@ async function fetchAllTokenAccounts(mintAddress) {
     return [];
   }
 }
+
 // ----------------- Analysis Functions ------------------
 function makeStepBuckets() {
   const buckets = {};
@@ -293,8 +307,7 @@ async function analyzeTop50(fresh, initialTop50, initialTop50Amounts, previousTo
   };
 }
 
-// ----------- Incremental Top Holder Valuable Tokens -----------
-
+// ----------- Incremental Top Holder Valuable Tokens with New TokenMeta -----------
 async function fetchHolderValuableTokens(owner) {
   try {
     const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
@@ -310,17 +323,20 @@ async function fetchHolderValuableTokens(owner) {
       return { mint, amount };
     }).filter(t => t.amount > 0);
     if (tokens.length === 0) return [];
+
     const uniqueMints = [...new Set(tokens.map(t => t.mint))];
     const prices = await fetchJupiterPricesBatched(uniqueMints, JUPITER_BATCH_SIZE);
+    const tokenMetas = await fetchTokenMetasParallel(uniqueMints);
+
     return tokens
       .map(t => {
         const price = prices[t.mint]?.usdPrice;
         if (!price) return null;
-        const name = SPL_TOKEN_MAP.get(t.mint) || "Unknown";
-        const logoURI = SPL_TOKEN_LOGO_MAP.get(t.mint) || null;
+        const tokenMeta = tokenMetas[t.mint];
         return {
-          name,
-          logoURI,
+          name: tokenMeta?.name || "Unknown",
+          symbol: tokenMeta?.symbol || "",
+          logoURI: tokenMeta?.logoURI || null,
           usdValue: t.amount * price
         };
       })
@@ -433,7 +449,12 @@ app.post("/api/stop", (req, res) => {
 
 app.get("/api/status", (req, res) => {
   if (!storage.latestData) {
-    return res.json({ message: "No data yet" });
+    // For price-only polling, serve at least prices if available
+    return res.json({
+      message: "No data yet",
+      prices: storage.prices,
+      tokenMint: storage.tokenMint
+    });
   }
   storage.latestData.tokenMint = storage.tokenMint;
   storage.latestData.currentTokenPrice = storage.prices[storage.tokenMint] || 0;
