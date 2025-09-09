@@ -390,7 +390,7 @@ async function fetchHolderValuableTokens(owner) {
     if (!price) continue;
     const meta = tokenMetas[t.mint] || { name: "Unknown", symbol: "", logoURI: null };
     const usdValue = t.amount * price;
-    if (usdValue > 37) {
+    if (usdValue > 500) {
       cache[t.mint] = {
         valuableTokens: [{
           name: meta.name,
@@ -532,3 +532,4 @@ app.listen(PORT, () => {
   logInfo(`Server running on port ${PORT}`);
   logInfo(`Scan interval: 1 second`);
 });
+
