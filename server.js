@@ -42,11 +42,15 @@ function getSecondsSinceStart() {
 async function fetchPrices() {
   if (!storage.tokenMint) return;
   try {
+    const MINTS = [
+      storage.tokenMint,
+      'So11111111111111111111111111111111111111112',
+      'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN'
+    ].filter(Boolean);
     const response = await fetch(
-      `https://lite-api.jup.ag/price/v3?ids=${storage.tokenMint},So11111111111111111111111111111111111111112,JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN`
+      `https://lite-api.jup.ag/price/v3?ids=${MINTS.join(',')}`
     );
     const data = await response.json();
-    // Save all fetched prices keyed by mint
     Object.keys(data).forEach(mint => {
       storage.prices[mint] = parseFloat(data[mint]?.usdPrice || 0);
     });
@@ -341,6 +345,7 @@ app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Scan interval: 1 second`);
 });
+
 
 
 
