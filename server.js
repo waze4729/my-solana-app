@@ -13,7 +13,6 @@ const PORT = process.env.PORT || 10000;
 app.use(bodyParser.json());
 app.use(express.static("public"));
 
-// Server-side storage
 const storage = {
   tokenMint: "",
   registry: {},
@@ -39,6 +38,7 @@ function getSecondsSinceStart() {
   const diffMs = now - storage.startTime;
   return Math.floor(diffMs / 1000);
 }
+
 async function fetchPrices() {
   if (!storage.tokenMint) return;
   try {
@@ -59,6 +59,7 @@ async function fetchPrices() {
     console.error('Error fetching prices:', error.message);
   }
 }
+
 function calculateUSDValue(amount, tokenMint) {
   const price = storage.prices[tokenMint];
   if (price && amount) {
@@ -66,6 +67,7 @@ function calculateUSDValue(amount, tokenMint) {
   }
   return 0;
 }
+
 async function fetchAllTokenAccounts(mintAddress) {
   const mintPublicKey = new PublicKey(mintAddress);
   try {
@@ -74,12 +76,7 @@ async function fetchAllTokenAccounts(mintAddress) {
       { 
         filters: [
           { dataSize: 165 }, 
-          { 
-            memcmp: { 
-              offset: 0, 
-              bytes: mintPublicKey.toBase58() 
-            } 
-          }
+          { memcmp: { offset: 0, bytes: mintPublicKey.toBase58() } }
         ] 
       }
     );
@@ -116,7 +113,6 @@ function analyze(registry, fresh) {
   const now = Date.now();
   const freshMap = new Map(fresh.map(h => [h.owner, h.amount]));
   const changes = makeStepBuckets();
-
   for (const [owner, info] of Object.entries(registry)) {
     const freshAmount = freshMap.get(owner);
     if (freshAmount !== undefined) {
@@ -124,7 +120,6 @@ function analyze(registry, fresh) {
       info.lastSeen = now;
       const changePct = ((freshAmount - info.baseline) / info.baseline) * 100;
       let matched = false;
-
       if (Math.abs(changePct) < 10) changes.unchanged++;
       else if (changePct > 0) {
         for (let pct = 100; pct >= 10; pct -= 10) {
@@ -144,7 +139,6 @@ function analyze(registry, fresh) {
     }
     changes.total++;
   }
-
   for (const { owner, amount } of fresh) {
     if (!registry[owner]) {
       registry[owner] = { baseline: amount, current: amount, lastSeen: now };
@@ -153,66 +147,46 @@ function analyze(registry, fresh) {
       changes.unchanged++;
     }
   }
-
   return changes;
 }
 
 async function analyzeTop50(fresh, initialTop50, initialTop50Amounts, previousTop50, previousTop50MinAmount) {
   if (!initialTop50 || initialTop50.length === 0) return null;
-
-  // Get current top 50 owners
   const sorted = fresh.slice().sort((a, b) => b.amount - a.amount);
   const currentTop50 = sorted.slice(0, 50).map(h => h.owner);
   const currentTop50Map = new Map(sorted.slice(0, 50).map(h => [h.owner, h.amount]));
   const currentTop50MinAmount = sorted[49]?.amount || 0;
-
-  // Completely new since last fetch:
   const newSinceLastFetch = currentTop50.filter(owner => 
     !previousTop50.has(owner) && 
     (currentTop50Map.get(owner) > previousTop50MinAmount)
   );
-
-  // Completely new since first fetch
   const newSinceFirstFetch = currentTop50.filter(owner => 
     storage.allTimeNewTop50.has(owner)
   ).length;
-
-  // Add new holders to persistent set
   newSinceLastFetch.forEach(owner => {
     storage.allTimeNewTop50.add(owner);
   });
-
-  // How many of the original top 50 are still in top 50 now?
   const stillInTop50 = initialTop50.filter(owner => currentTop50.includes(owner));
-  // How many of the original top 50 are now gone?
   const goneFromInitialTop50 = initialTop50.filter(owner => !currentTop50.includes(owner));
-  // How many in the current top 50 were not in the original top 50?
   const newInTop50 = currentTop50.filter(owner => !initialTop50.includes(owner));
-
-  // Calculate sales and purchases from Top 50
   const top50Sales = {
     sold100: 0,
     sold50: 0,
     sold25: 0,
   };
-
   const top50Buys = {
     bought100: 0,
     bought50: 0,
     bought25: 0,
     bought10: 0,
   };
-
-  // Check each original top 50 holder
   for (const owner of initialTop50) {
     const initialAmount = initialTop50Amounts.get(owner);
     const currentAmount = currentTop50Map.get(owner) || 0;
-    
     if (currentAmount === 0) {
       top50Sales.sold100++;
     } else {
       const changePct = ((currentAmount - initialAmount) / initialAmount) * 100;
-      
       if (changePct <= -50) {
         top50Sales.sold50++;
       } else if (changePct <= -25) {
@@ -228,11 +202,8 @@ async function analyzeTop50(fresh, initialTop50, initialTop50Amounts, previousTo
       }
     }
   }
-
-  // Update previous top 50 tracking for next run
   storage.previousTop50 = new Set(currentTop50);
   storage.previousTop50MinAmount = currentTop50MinAmount;
-
   return {
     currentTop50Count: currentTop50.length,
     stillInTop50Count: stillInTop50.length,
@@ -245,12 +216,53 @@ async function analyzeTop50(fresh, initialTop50, initialTop50Amounts, previousTo
   };
 }
 
+// Fetches valuable tokens for a wallet (> $37 per token, up to 50 tokens per price query)
+async function fetchHolderValuableTokens(owner) {
+  try {
+    const tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+      new PublicKey(owner),
+      { programId: new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA") }
+    );
+    const tokens = tokenAccounts.value.map(acc => {
+      const parsed = acc.account.data.parsed;
+      const info = parsed.info;
+      const mint = info.mint;
+      const decimals = info.tokenAmount.decimals;
+      const amount = Number(info.tokenAmount.amount) / Math.pow(10, decimals);
+      return { mint, amount };
+    }).filter(t => t.amount > 0);
+    if (tokens.length === 0) return [];
+    const uniqueMints = [...new Set(tokens.map(t => t.mint))];
+    let prices = {};
+    for (let i = 0; i < uniqueMints.length; i += 50) {
+      const batch = uniqueMints.slice(i, i + 50);
+      const priceRes = await fetch(`https://lite-api.jup.ag/price/v3?ids=${batch.join(",")}`);
+      const priceData = await priceRes.json();
+      prices = { ...prices, ...priceData };
+    }
+    return tokens
+      .map(t => {
+        const price = prices[t.mint]?.usdPrice;
+        if (!price) return null;
+        return {
+          mint: t.mint,
+          amount: t.amount,
+          usdValue: t.amount * price,
+          price: price
+        };
+      })
+      .filter(t => t && t.usdValue > 37)
+      .sort((a, b) => b.usdValue - a.usdValue);
+  } catch (e) {
+    console.error("Error fetching holder tokens", e.message || e);
+    return [];
+  }
+}
+
 async function pollData() {
   if (!storage.tokenMint || !storage.scanning) return;
-  
   try {
     const fresh = await fetchAllTokenAccounts(storage.tokenMint);
-
     if (!storage.initialTop50) {
       const sorted = fresh.slice().sort((a, b) => b.amount - a.amount);
       storage.initialTop50 = sorted.slice(0, 50).map(h => h.owner);
@@ -258,7 +270,6 @@ async function pollData() {
       storage.previousTop50 = new Set(storage.initialTop50);
       storage.previousTop50MinAmount = sorted[49]?.amount || 0;
     }
-
     const changes = analyze(storage.registry, fresh);
     const top50Stats = await analyzeTop50(
       fresh, 
@@ -267,8 +278,11 @@ async function pollData() {
       storage.previousTop50,
       storage.previousTop50MinAmount
     );
-
-    // Store latest data for client
+    // Top Holders with valuable tokens
+    const topHolders = [...fresh].sort((a, b) => b.amount - a.amount).slice(0, 15);
+    for (const holder of topHolders) {
+      holder.valuableTokens = await fetchHolderValuableTokens(holder.owner);
+    }
     storage.latestData = {
       fresh,
       registry: storage.registry,
@@ -278,20 +292,18 @@ async function pollData() {
       timeRunning: getSecondsSinceStart(),
       startTime: storage.startTime,
       prices: storage.prices,
-      tokenMint: storage.tokenMint
+      tokenMint: storage.tokenMint,
+      topHolders
     };
-    
     console.log(`Scan completed at ${new Date().toLocaleTimeString()} - ${changes.current} holders`);
   } catch (error) {
     console.error("Error in pollData:", error.message);
   }
 }
 
-// Start scanning
 app.post("/api/start", async (req, res) => {
   const { mint } = req.body;
   if (!mint) return res.status(400).send("Missing token mint");
-
   storage.tokenMint = mint;
   storage.registry = {};
   storage.initialTop50 = null;
@@ -301,25 +313,14 @@ app.post("/api/start", async (req, res) => {
   storage.allTimeNewTop50 = new Set();
   storage.scanning = true;
   storage.startTime = new Date();
-
   if (storage.pollInterval) clearInterval(storage.pollInterval);
-  
-  // Fetch prices immediately
   await fetchPrices();
-  
-  // Start polling every 1 second (1000ms)
   storage.pollInterval = setInterval(pollData, 1000);
-  
-  // Update prices every 30 seconds
   setInterval(fetchPrices, 30000);
-  
-  // Do an immediate scan
   pollData();
-
   res.send("Scan started - polling every 1 second");
 });
 
-// Stop scanning
 app.post("/api/stop", (req, res) => {
   storage.scanning = false;
   if (storage.pollInterval) {
@@ -333,7 +334,6 @@ app.get("/api/status", (req, res) => {
   if (!storage.latestData) {
     return res.json({ message: "No data yet" });
   }
-  // Ensure latestData includes live price info for the current token
   storage.latestData.tokenMint = storage.tokenMint;
   storage.latestData.currentTokenPrice = storage.prices[storage.tokenMint] || 0;
   storage.latestData.solPrice = storage.prices["So11111111111111111111111111111111111111112"] || 0;
@@ -345,7 +345,3 @@ app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`Scan interval: 1 second`);
 });
-
-
-
-
