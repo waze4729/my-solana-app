@@ -573,28 +573,9 @@
       `;
       salesContainer.appendChild(sold100Item);
       const top50Container = document.getElementById('top50Stats');
-      if (data.top50Stats) {
-        top50Container.innerHTML = `
-          <div class="stat-item">
-            <span>Gone from top 50:</span>
-            <span class="stat-value negative">${data.top50Stats.goneFromInitialTop50Count}</span>
-          </div>
-          <div class="stat-item">
-            <span>New in top 50:</span>
-            <span class="stat-value positive">${data.top50Stats.newInTop50Count}</span>
-          </div>
-          <div class="stat-item">
-            <span>New since last fetch:</span>
-            <span class="stat-value">${data.top50Stats.completelyNewSinceLastFetch}</span>
-          </div>
-          <div class="stat-item">
-            <span>New since start:</span>
-            <span class="stat-value">${data.top50Stats.completelyNewSinceFirstFetch}</span>
-          </div>
-        `;
-      } else {
+  
         top50Container.innerHTML = '<div class="loading">Building top 50 baseline</div>';
-      }
+ 
       const topHoldersContainer = document.getElementById('topHolders');
       topHoldersContainer.innerHTML = '';
       if (data.topHolders && data.topHolders.length > 0) {
@@ -694,3 +675,4 @@
   </script>
 </body>
 </html>
+
