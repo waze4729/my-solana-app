@@ -11,7 +11,10 @@ let cache = {
     holders: [],
     spinHistory: [],
     jokerWallets: new Map(), // wallet -> joker count
-    jokerBonusWinners: [] // wallets that reached 3 jokers
+    jokerBonusWinners: [], // wallets that reached 3 jokers
+    lastSpinTime: Date.now(),
+    nextSpinTime: Date.now() + SPIN_INTERVAL,
+    isSpinning: false
 };
 
 let connection = new Connection(RPC_ENDPOINT);
@@ -97,8 +100,22 @@ function spinWheel() {
     cache.spinHistory.unshift(winner);
     if (cache.spinHistory.length > 50) cache.spinHistory.pop();
     
+    // Update spin timing
+    cache.lastSpinTime = Date.now();
+    cache.nextSpinTime = cache.lastSpinTime + SPIN_INTERVAL;
+    
     console.log(`🎉 WINNER: ${winner.address.slice(0, 8)}... | Joker: ${getsJoker} | Total Jokers: ${jokerCount}`);
     return winner;
+}
+
+// Auto-spin function (called by server interval)
+function autoSpin() {
+    if (!cache.isSpinning && cache.holders.length > 0) {
+        cache.isSpinning = true;
+        console.log('🔄 SERVER: Auto-spin triggered');
+        spinWheel();
+        cache.isSpinning = false;
+    }
 }
 
 // Serve HTML
@@ -108,6 +125,8 @@ app.get("/", (req, res) => {
         return { wallet, jokerCount };
     });
 
+    const timeUntilNextSpin = Math.max(0, Math.floor((cache.nextSpinTime - Date.now()) / 1000));
+    
     res.send(`
 <!DOCTYPE html>
 <html>
@@ -176,7 +195,6 @@ app.get("/", (req, res) => {
             overflow: hidden;
             border: 8px solid #ffd700;
             box-shadow: 0 0 30px rgba(255, 215, 0, 0.5);
-            transition: transform 4s cubic-bezier(0.2, 0.8, 0.2, 1);
         }
         .wheel-spinning {
             animation: spin 0.1s linear infinite;
@@ -450,27 +468,6 @@ app.get("/", (req, res) => {
             text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
         }
         
-        /* WINNER POPUP */
-        .winner-popup {
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: linear-gradient(45deg, #ff0000, #ff6b00);
-            padding: 30px;
-            border-radius: 20px;
-            text-align: center;
-            z-index: 1000;
-            box-shadow: 0 0 60px rgba(255, 0, 0, 0.9);
-            animation: popup 0.5s ease-out;
-            border: 4px solid #ffd700;
-            max-width: 400px;
-        }
-        @keyframes popup {
-            from { transform: translate(-50%, -50%) scale(0); opacity: 0; }
-            to { transform: translate(-50%, -50%) scale(1); opacity: 1; }
-        }
-        
         /* SCROLLBARS */
         ::-webkit-scrollbar {
             width: 6px;
@@ -501,7 +498,7 @@ app.get("/", (req, res) => {
             <div class="stat-label">TOTAL TOKENS</div>
         </div>
         <div class="stat-card">
-            <div class="stat-number" id="last-winner">-</div>
+            <div class="stat-number" id="last-winner">${cache.spinHistory.length > 0 ? cache.spinHistory[0].address.slice(0, 4) + '...' + cache.spinHistory[0].address.slice(-4) : '-'}</div>
             <div class="stat-label">LAST WINNER</div>
         </div>
         <div class="stat-card">
@@ -509,7 +506,7 @@ app.get("/", (req, res) => {
             <div class="stat-label">JOKER WALLETS</div>
         </div>
         <div class="stat-card">
-            <div class="stat-number" id="next-spin">30s</div>
+            <div class="stat-number" id="next-spin">${timeUntilNextSpin}s</div>
             <div class="stat-label">NEXT SPIN</div>
         </div>
     </div>
@@ -541,14 +538,25 @@ app.get("/", (req, res) => {
                 <div class="wheel-pointer"></div>
                 <div class="wheel" id="wheel">
                     <div class="current-winner" id="current-winner">
-                        <div>SPINNING IN <span id="spin-timer">30</span>s</div>
+                        ${cache.spinHistory.length > 0 ? `
+                            <div class="winner-address">
+                                ${cache.spinHistory[0].address.slice(0, 6)}...${cache.spinHistory[0].address.slice(-4)}
+                            </div>
+                            <div class="winner-stats">
+                                ${cache.spinHistory[0].tokens.toLocaleString()} tokens<br>
+                                ${cache.spinHistory[0].percentage}%
+                            </div>
+                            ${cache.spinHistory[0].gotJoker ? `<div class="joker-indicator" style="margin-top: 5px;">🎭 ${cache.spinHistory[0].jokerCount}/3</div>` : ''}
+                        ` : `
+                            <div>Next spin in <span id="spin-timer">${timeUntilNextSpin}</span>s</div>
+                        `}
                     </div>
                     <div class="wheel-center"></div>
                 </div>
             </div>
             
             <div class="countdown" id="countdown">
-                Next Spin: <span id="countdown-timer">30</span>s
+                ${cache.isSpinning ? 'SPINNING...' : `Next Spin: <span id="countdown-timer">${timeUntilNextSpin}</span>s`}
             </div>
 
             <!-- JOKER WALLETS ROW -->
@@ -584,7 +592,7 @@ app.get("/", (req, res) => {
 
         <!-- RIGHT PANEL - HISTORY -->
         <div class="panel">
-            <div class="panel-title">📜 WINNERS LIST</div>
+            <div class="panel-title">📜 SPIN HISTORY</div>
             <div class="history-list" id="history-list">
                 ${cache.spinHistory.map(spin => `
                     <div class="history-item">
@@ -606,223 +614,43 @@ app.get("/", (req, res) => {
         </div>
     </div>
 
-    <audio id="spinSound" src="https://assets.mixkit.co/sfx/preview/mixkit-slot-machine-wheel-1931.mp3"></audio>
-    <audio id="winSound" src="https://assets.mixkit.co/sfx/preview/mixkit-winning-chimes-2015.mp3"></audio>
-    <audio id="tickSound" src="https://assets.mixkit.co/sfx/preview/mixkit-arcade-game-jump-coin-216.mp3"></audio>
-    <audio id="jokerSound" src="https://assets.mixkit.co/sfx/preview/mixkit-extra-bonus-in-a-video-game-2043.mp3"></audio>
-
     <script>
-        let countdown = 30;
-        let isSpinning = false;
-        let currentWinner = null;
-        let countdownInterval = null;
+        // Simple auto-refresh to get latest data from server
+        setInterval(() => {
+            location.reload();
+        }, 5000); // Refresh every 5 seconds to get latest data
         
-        // Create wheel slices with holder addresses
-        function createWheelSlices() {
-            const wheel = document.getElementById('wheel');
-            // Clear existing slices except center and current winner
-            const currentWinnerDiv = document.getElementById('current-winner');
-            const wheelCenter = document.querySelector('.wheel-center');
-            wheel.innerHTML = '';
-            wheel.appendChild(currentWinnerDiv);
-            wheel.appendChild(wheelCenter);
-            
-            const sliceCount = Math.min(${cache.holders.length}, 24);
-            const angle = 360 / sliceCount;
-            
-            // Get all holders for the wheel (random selection, no weighting)
-            const wheelHolders = ${JSON.stringify(cache.holders)}
-                .slice(0, sliceCount);
-            
-            wheelHolders.forEach((holder, index) => {
-                const slice = document.createElement('div');
-                slice.className = 'wheel-slice';
-                slice.style.transform = \`rotate(\${index * angle}deg)\`;
-                
-                const shortAddress = \`\${holder.owner.slice(0, 4)}...\${holder.owner.slice(-3)}\`;
-                slice.innerHTML = \`
-                    <div style="transform: rotate(\${90 - angle/2}deg); transform-origin: left center;">
-                        \${shortAddress}
-                    </div>
-                \`;
-                
-                wheel.appendChild(slice);
-            });
-        }
-        
-        // Countdown timer
-        function startCountdown() {
-            // Clear any existing interval
-            if (countdownInterval) {
-                clearInterval(countdownInterval);
-            }
-            
-            countdown = 30;
-            updateTimerDisplay();
-            
-            countdownInterval = setInterval(() => {
-                countdown--;
-                updateTimerDisplay();
-                
-                if (countdown <= 0) {
-                    clearInterval(countdownInterval);
-                    spinWheel();
-                }
-            }, 1000);
-        }
-        
-        function updateTimerDisplay() {
-            document.getElementById('countdown-timer').textContent = countdown;
-            document.getElementById('spin-timer').textContent = countdown;
-            document.getElementById('next-spin').textContent = countdown + 's';
-        }
-        
-        // Spin wheel function - ONLY ONE SPIN
-        async function spinWheel() {
-            if (isSpinning) return;
-            
-            isSpinning = true;
-            
-            // Stop countdown during spin
-            if (countdownInterval) {
-                clearInterval(countdownInterval);
-            }
-            
-            // Play spin sound
-            document.getElementById('spinSound').play();
-            
-            const wheel = document.getElementById('wheel');
-            wheel.classList.add('wheel-spinning');
-            
-            // Update current winner display to show spinning
-            document.getElementById('current-winner').innerHTML = '<div>SPINNING...</div>';
-            
-            // Play tick sounds during spin
-            const tickInterval = setInterval(() => {
-                document.getElementById('tickSound').play();
-            }, 150);
-            
-            try {
-                const response = await fetch('/spin', { method: 'POST' });
-                const winner = await response.json();
-                
-                setTimeout(() => {
-                    clearInterval(tickInterval);
-                    wheel.classList.remove('wheel-spinning');
-                    
-                    if (winner && winner.address) {
-                        // Play win sound
-                        document.getElementById('winSound').play();
-                        
-                        // Play joker sound (every winner gets joker)
-                        setTimeout(() => {
-                            document.getElementById('jokerSound').play();
-                        }, 1000);
-                        
-                        // Update current winner display
-                        let winnerHTML = \`
-                            <div class="winner-address">
-                                \${winner.address.slice(0, 6)}...\${winner.address.slice(-4)}
-                            </div>
-                            <div class="winner-stats">
-                                \${winner.tokens.toLocaleString()} tokens<br>
-                                \${winner.percentage}%
-                            </div>
-                            <div class="joker-indicator" style="margin-top: 5px;">
-                                🎭 +1 JOKER! (\${winner.jokerCount}/3)
-                            </div>
-                        \`;
-                        
-                        document.getElementById('current-winner').innerHTML = winnerHTML;
-                        
-                        // Show winner popup
-                        showWinnerPopup(winner);
-                        
-                        // AUTO RELOAD PAGE after spin completion to get fresh data
-                        setTimeout(() => {
-                            location.reload();
-                        }, 3000);
-                    }
-                    
-                    isSpinning = false;
-                    
-                }, 4000);
-                
-            } catch (error) {
-                console.error('Spin error:', error);
-                isSpinning = false;
-                wheel.classList.remove('wheel-spinning');
-                clearInterval(tickInterval);
-                // Restart countdown if there was an error
-                startCountdown();
+        // Update countdown display
+        function updateCountdown() {
+            const timeLeft = ${timeUntilNextSpin};
+            if (timeLeft > 0) {
+                document.getElementById('countdown-timer').textContent = timeLeft;
+                document.getElementById('spin-timer').textContent = timeLeft;
+                document.getElementById('next-spin').textContent = timeLeft + 's';
             }
         }
         
-        // Show winner popup
-        function showWinnerPopup(winner) {
-            const popup = document.createElement('div');
-            popup.className = 'winner-popup';
-            
-            let popupHTML = \`
-                <h2 style="font-size: 2em; margin-bottom: 15px;">🎉 WINNER! 🎉</h2>
-                <div style="font-size: 1.1em; margin: 10px 0; font-family: monospace;">
-                    \${winner.address.slice(0, 12)}...\${winner.address.slice(-12)}
-                </div>
-                <div style="font-size: 1.5em; color: #ffd700; margin: 10px 0;">
-                    🪙 \${winner.tokens.toLocaleString()} TOKENS
-                </div>
-                <div style="font-size: 1em;">
-                    📊 \${winner.percentage}% of supply
-                </div>
-                <div style="font-size: 1.8em; color: #ff00ff; margin: 15px 0; text-shadow: 0 0 20px #ff00ff;">
-                    🎭 JOKER AWARDED! 🎭
-                </div>
-                <div style="font-size: 1.2em;">
-                    Total Jokers: \${winner.jokerCount}/3
-                </div>
-            \`;
-            
-            if (winner.isJokerBonus) {
-                popupHTML += \`
-                    <div style="font-size: 2em; color: #00ffff; margin: 15px 0; text-shadow: 0 0 20px #00ffff;">
-                        🎉🎉 JOKER BONUS! 🎉🎉
-                    </div>
-                \`;
-            }
-            
-            popup.innerHTML = popupHTML;
-            document.body.appendChild(popup);
-            
-            setTimeout(() => {
-                if (document.body.contains(popup)) {
-                    document.body.removeChild(popup);
-                }
-            }, 4500);
-        }
-        
-        // Initialize
-        createWheelSlices();
-        startCountdown();
+        // Initial update
+        updateCountdown();
     </script>
 </body>
 </html>
     `);
 });
 
-// API to spin wheel
-app.post("/spin", (req, res) => {
-    const winner = spinWheel();
-    res.json(winner || { error: "No holders available" });
-});
-
 // API to get current data
 app.get("/api/data", (req, res) => {
+    const timeUntilNextSpin = Math.max(0, Math.floor((cache.nextSpinTime - Date.now()) / 1000));
+    
     res.json({
         holders: cache.holders,
         totalTokens: cache.holders.reduce((sum, h) => sum + h.amount, 0),
         spinHistory: cache.spinHistory,
         jokerWallets: Object.fromEntries(cache.jokerWallets),
-        jokerBonusWinners: cache.jokerBonusWinners
+        jokerBonusWinners: cache.jokerBonusWinners,
+        timeUntilNextSpin: timeUntilNextSpin,
+        isSpinning: cache.isSpinning,
+        lastWinner: cache.spinHistory.length > 0 ? cache.spinHistory[0] : null
     });
 });
 
@@ -830,19 +658,19 @@ app.get("/api/data", (req, res) => {
 const PORT = process.env.PORT || 1000;
 app.listen(PORT, async () => {
     console.log(`🎡 POWERBALL WHEEL Server running on port ${PORT}`);
-    console.log("⏰ Auto-spinning every 30 seconds");
+    console.log("⏰ Server handles all timing and spins every 30 seconds");
     console.log("🎲 COMPLETELY RANDOM selection (0.01% - 5% holders only)");
     console.log("🎭 Joker system: EVERY WINNER gets 1 joker, 3 jokers = bonus!");
-    console.log("🔄 Auto page reload after each spin");
+    console.log("🔄 Client auto-refreshes every 5 seconds");
     console.log("💾 Using in-memory cache (no JSON files)");
     
     await getHolders();
     
-    // Auto-spin every 30 seconds
+    // Server handles all timing and spins
     setInterval(() => {
-        spinWheel();
+        autoSpin();
     }, SPIN_INTERVAL);
     
     // Refresh holders every minute
-    setInterval(getHolders, 6000);
+    setInterval(getHolders, 60000);
 });
