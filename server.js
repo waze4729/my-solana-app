@@ -4,7 +4,7 @@ const express = require("express");
 // CONFIG
 const RPC_ENDPOINT = "https://mainnet.helius-rpc.com/?api-key=07ed88b0-3573-4c79-8d62-3a2cbd5c141a";
 const TOKEN_MINT = "8KK76tofUfbe7pTh1yRpbQpTkYwXKUjLzEBtAUTwpump";
-const SPIN_INTERVAL = 15 * 60 * 1000; // 15 minutes
+const SPIN_INTERVAL = 30 * 1000; // 30 seconds
 
 // In-memory cache (no JSON files)
 let cache = {
@@ -18,6 +18,7 @@ let connection = new Connection(RPC_ENDPOINT);
 const app = express();
 
 app.use(express.static('public'));
+app.use(express.json());
 
 // Get token holders with 0.01% to 5% filter
 async function getHolders() {
@@ -54,7 +55,7 @@ async function getHolders() {
     }
 }
 
-// Spin the wheel with joker logic
+// Spin the wheel with joker logic - EVERY WINNER GETS A JOKER
 function spinWheel() {
     if (cache.holders.length === 0) return null;
     
@@ -72,21 +73,21 @@ function spinWheel() {
     
     if (!winnerHolder) return null;
     
-    // Check if winner gets a joker (10% chance)
-    const getsJoker = Math.random() < 0.1;
+    // EVERY WINNER GETS A JOKER
+    const getsJoker = true;
     let jokerCount = cache.jokerWallets.get(winnerHolder.owner) || 0;
+    jokerCount++;
+    cache.jokerWallets.set(winnerHolder.owner, jokerCount);
     
-    if (getsJoker) {
-        jokerCount++;
-        cache.jokerWallets.set(winnerHolder.owner, jokerCount);
-        console.log(`🎭 JOKER ASSIGNED to ${winnerHolder.owner.slice(0, 8)}... Total: ${jokerCount}`);
-        
-        // Check if this wallet reached 3 jokers
-        if (jokerCount === 3) {
-            if (!cache.jokerBonusWinners.includes(winnerHolder.owner)) {
-                cache.jokerBonusWinners.push(winnerHolder.owner);
-                console.log(`🎉🎉🎉 JOKER BONUS TRIGGERED for ${winnerHolder.owner.slice(0, 8)}... 🎉🎉🎉`);
-            }
+    console.log(`🎭 JOKER ASSIGNED to ${winnerHolder.owner.slice(0, 8)}... Total: ${jokerCount}`);
+    
+    // Check if this wallet reached 3 jokers
+    let isNewBonusWinner = false;
+    if (jokerCount === 3) {
+        if (!cache.jokerBonusWinners.includes(winnerHolder.owner)) {
+            cache.jokerBonusWinners.push(winnerHolder.owner);
+            isNewBonusWinner = true;
+            console.log(`🎉🎉🎉 JOKER BONUS TRIGGERED for ${winnerHolder.owner.slice(0, 8)}... 🎉🎉🎉`);
         }
     }
     
@@ -97,7 +98,8 @@ function spinWheel() {
         percentage: (winnerHolder.amount / totalTokens * 100).toFixed(4),
         gotJoker: getsJoker,
         jokerCount: jokerCount,
-        isJokerBonus: jokerCount === 3
+        isJokerBonus: jokerCount === 3,
+        isNewBonusWinner: isNewBonusWinner
     };
     
     cache.spinHistory.unshift(winner);
@@ -373,29 +375,6 @@ app.get("/", (req, res) => {
             text-align: center;
             margin: 10px 0;
         }
-        .spin-button {
-            background: linear-gradient(45deg, #ff0000, #ff6b00);
-            border: none;
-            padding: 15px 40px;
-            font-size: 1.2em;
-            color: white;
-            border-radius: 50px;
-            cursor: pointer;
-            font-weight: bold;
-            box-shadow: 0 0 20px rgba(255, 107, 0, 0.5);
-            transition: all 0.3s;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-        .spin-button:hover {
-            transform: scale(1.05);
-            box-shadow: 0 0 30px rgba(255, 107, 0, 0.8);
-        }
-        .spin-button:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-            transform: none;
-        }
         .countdown {
             font-size: 1.2em;
             text-align: center;
@@ -433,6 +412,39 @@ app.get("/", (req, res) => {
         .joker-stat {
             color: #ff00ff;
             text-shadow: 0 0 10px rgba(255, 0, 255, 0.5);
+        }
+        
+        /* JOKER WALLETS ROW */
+        .joker-wallets-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            justify-content: center;
+            margin-top: 10px;
+            max-height: 80px;
+            overflow-y: auto;
+        }
+        .joker-wallet-item {
+            background: rgba(255, 0, 255, 0.2);
+            padding: 8px 12px;
+            border-radius: 20px;
+            font-size: 0.8em;
+            border: 1px solid #ff00ff;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .joker-wallet-jokers {
+            background: #ff00ff;
+            color: white;
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.7em;
+            font-weight: bold;
         }
         
         /* LINKS */
@@ -505,7 +517,7 @@ app.get("/", (req, res) => {
             <div class="stat-label">JOKER WALLETS</div>
         </div>
         <div class="stat-card">
-            <div class="stat-number" id="next-spin">15:00</div>
+            <div class="stat-number" id="next-spin">30s</div>
             <div class="stat-label">NEXT SPIN</div>
         </div>
     </div>
@@ -537,32 +549,43 @@ app.get("/", (req, res) => {
                 <div class="wheel-pointer"></div>
                 <div class="wheel" id="wheel">
                     <div class="current-winner" id="current-winner">
-                        <div>SPIN THE WHEEL!</div>
+                        <div>SPINNING IN <span id="spin-timer">30</span>s</div>
                     </div>
                     <div class="wheel-center"></div>
                 </div>
             </div>
             
             <div class="countdown" id="countdown">
-                Next Spin: <span id="countdown-timer">15:00</span>
+                Next Spin: <span id="countdown-timer">30</span>s
             </div>
-            
-            <div class="controls">
-                <button class="spin-button" onclick="spinWheel()" id="spin-btn">🎡 SPIN 🎡</button>
+
+            <!-- JOKER WALLETS ROW -->
+            <div class="joker-wallets-row" id="joker-wallets-container">
+                ${Array.from(cache.jokerWallets.entries()).map(([wallet, count]) => `
+                    <div class="joker-wallet-item">
+                        <a href="https://solscan.io/account/${wallet}" target="_blank">
+                            ${wallet.slice(0, 6)}...${wallet.slice(-4)}
+                        </a>
+                        <div class="joker-wallet-jokers">${count}</div>
+                    </div>
+                `).join('')}
             </div>
 
             <!-- JOKER BONUS SECTION -->
-            ${jokerBonusList.length > 0 ? `
+            ${cache.jokerBonusWinners.length > 0 ? `
             <div class="joker-bonus-section">
                 <div class="joker-bonus-title">🎉 JOKER BONUS WINNERS 🎉</div>
-                ${jokerBonusList.map(bonus => `
+                ${cache.jokerBonusWinners.map(wallet => {
+                    const jokerCount = cache.jokerWallets.get(wallet) || 0;
+                    return `
                     <div class="joker-bonus-item">
                         <span class="joker-bonus-badge">3</span>
-                        <a href="https://solscan.io/account/${bonus.wallet}" target="_blank">
-                            ${bonus.wallet.slice(0, 8)}...${bonus.wallet.slice(-8)}
+                        <a href="https://solscan.io/account/${wallet}" target="_blank">
+                            ${wallet.slice(0, 8)}...${wallet.slice(-8)}
                         </a>
+                        <span style="margin-left: 5px; color: #ff00ff;">(${jokerCount} jokers)</span>
                     </div>
-                `).join('')}
+                `}).join('')}
             </div>
             ` : ''}
         </div>
@@ -597,7 +620,7 @@ app.get("/", (req, res) => {
     <audio id="jokerSound" src="https://assets.mixkit.co/sfx/preview/mixkit-extra-bonus-in-a-video-game-2043.mp3"></audio>
 
     <script>
-        let countdown = 15 * 60;
+        let countdown = 30;
         let isSpinning = false;
         let currentWinner = null;
         
@@ -611,11 +634,11 @@ app.get("/", (req, res) => {
             wheel.appendChild(currentWinnerDiv);
             wheel.appendChild(wheelCenter);
             
-            const sliceCount = Math.min(holders.length, 24);
+            const sliceCount = Math.min(${cache.holders.length}, 24);
             const angle = 360 / sliceCount;
             
             // Get top holders for the wheel
-            const wheelHolders = [...holders]
+            const wheelHolders = [...${JSON.stringify(cache.holders)}]
                 .sort((a, b) => b.amount - a.amount)
                 .slice(0, sliceCount);
             
@@ -638,18 +661,17 @@ app.get("/", (req, res) => {
         // Countdown timer
         function updateCountdown() {
             countdown--;
+            document.getElementById('countdown-timer').textContent = countdown;
+            document.getElementById('spin-timer').textContent = countdown;
+            document.getElementById('next-spin').textContent = countdown + 's';
+            
             if (countdown <= 0) {
-                countdown = 15 * 60;
+                countdown = 30;
                 autoSpin();
             }
-            const mins = Math.floor(countdown / 60);
-            const secs = countdown % 60;
-            const timerText = \`\${mins}:\${secs.toString().padStart(2, '0')}\`;
-            document.getElementById('countdown-timer').textContent = timerText;
-            document.getElementById('next-spin').textContent = timerText;
         }
         
-        // Auto spin every 15 minutes
+        // Auto spin every 30 seconds
         function autoSpin() {
             if (!isSpinning) {
                 spinWheel();
@@ -661,7 +683,6 @@ app.get("/", (req, res) => {
             if (isSpinning) return;
             
             isSpinning = true;
-            document.getElementById('spin-btn').disabled = true;
             
             // Play spin sound
             document.getElementById('spinSound').play();
@@ -689,12 +710,10 @@ app.get("/", (req, res) => {
                         // Play win sound
                         document.getElementById('winSound').play();
                         
-                        // Play joker sound if they got one
-                        if (winner.gotJoker) {
-                            setTimeout(() => {
-                                document.getElementById('jokerSound').play();
-                            }, 1000);
-                        }
+                        // Play joker sound (every winner gets joker)
+                        setTimeout(() => {
+                            document.getElementById('jokerSound').play();
+                        }, 1000);
                         
                         // Update current winner display
                         let winnerHTML = \`
@@ -705,42 +724,100 @@ app.get("/", (req, res) => {
                                 \${winner.tokens.toLocaleString()} tokens<br>
                                 \${winner.percentage}%
                             </div>
+                            <div class="joker-indicator" style="margin-top: 5px;">
+                                🎭 +1 JOKER! (\${winner.jokerCount}/3)
+                            </div>
                         \`;
-                        
-                        if (winner.gotJoker) {
-                            winnerHTML += \`
-                                <div class="joker-indicator" style="margin-top: 5px;">
-                                    🎭 +1 JOKER! (\${winner.jokerCount}/3)
-                                </div>
-                            \`;
-                        }
                         
                         document.getElementById('current-winner').innerHTML = winnerHTML;
                         
                         // Show winner popup
                         showWinnerPopup(winner);
                         
-                        // Update stats
-                        document.getElementById('last-winner').textContent = 
-                            winner.address.slice(0, 4) + '...' + winner.address.slice(-4);
-                        document.getElementById('joker-count').textContent = 
-                            cache.jokerWallets.size;
+                        // Update the entire layout without page refresh
+                        setTimeout(updateLayout, 2000);
                     }
                     
                     isSpinning = false;
-                    document.getElementById('spin-btn').disabled = false;
-                    
-                    // Reload page after showing winner to update history
-                    setTimeout(() => location.reload(), 5000);
                     
                 }, 4000);
                 
             } catch (error) {
                 console.error('Spin error:', error);
                 isSpinning = false;
-                document.getElementById('spin-btn').disabled = false;
                 wheel.classList.remove('wheel-spinning');
                 clearInterval(tickInterval);
+            }
+        }
+        
+        // Update layout without page refresh
+        async function updateLayout() {
+            try {
+                const response = await fetch('/api/data');
+                const data = await response.json();
+                
+                // Update holders list
+                const holdersContainer = document.getElementById('holders-container');
+                holdersContainer.innerHTML = data.holders.map(holder => {
+                    const jokerCount = data.jokerWallets[holder.owner] || 0;
+                    return \`
+                    <div class="holder-card">
+                        <div class="holder-address">
+                            <a href="https://solscan.io/account/\${holder.owner}" target="_blank">
+                                \${holder.owner.slice(0, 8)}...\${holder.owner.slice(-8)}
+                            </a>
+                            \${jokerCount > 0 ? \`<span class="joker-indicator">🎭×\${jokerCount}</span>\` : ''}
+                        </div>
+                        <div class="holder-tokens">\${holder.amount.toLocaleString()} tokens</div>
+                    </div>
+                    \`;
+                }).join('');
+                
+                // Update history list
+                const historyContainer = document.getElementById('history-list');
+                historyContainer.innerHTML = data.spinHistory.map(spin => \`
+                    <div class="history-item">
+                        \${spin.gotJoker ? 
+                            (spin.jokerCount >= 3 ? 
+                                '<span class="joker-bonus-badge">3</span>' : 
+                                '<span class="joker-badge">🎭</span>'
+                            ) : ''
+                        }
+                        <strong>\${spin.time.split(' ')[1]}</strong><br>
+                        <a href="https://solscan.io/account/\${spin.address}" target="_blank">
+                            \${spin.address.slice(0, 8)}...\${spin.address.slice(-8)}
+                        </a><br>
+                        \${spin.tokens.toLocaleString()} tokens (\${spin.percentage}%)
+                        \${spin.gotJoker ? \`<br><small class="joker-indicator">+1 Joker (\${spin.jokerCount}/3)</small>\` : ''}
+                    </div>
+                \`).join('');
+                
+                // Update joker wallets row
+                const jokerWalletsContainer = document.getElementById('joker-wallets-container');
+                const jokerWallets = Object.entries(data.jokerWallets);
+                jokerWalletsContainer.innerHTML = jokerWallets.map(([wallet, count]) => \`
+                    <div class="joker-wallet-item">
+                        <a href="https://solscan.io/account/\${wallet}" target="_blank">
+                            \${wallet.slice(0, 6)}...\${wallet.slice(-4)}
+                        </a>
+                        <div class="joker-wallet-jokers">\${count}</div>
+                    </div>
+                \`).join('');
+                
+                // Update stats
+                document.getElementById('total-holders').textContent = data.holders.length;
+                document.getElementById('total-supply').textContent = data.totalTokens.toLocaleString();
+                document.getElementById('joker-count').textContent = jokerWallets.length;
+                
+                // Update last winner if there are spins
+                if (data.spinHistory.length > 0) {
+                    const lastWinner = data.spinHistory[0].address;
+                    document.getElementById('last-winner').textContent = 
+                        lastWinner.slice(0, 4) + '...' + lastWinner.slice(-4);
+                }
+                
+            } catch (error) {
+                console.error('Layout update error:', error);
             }
         }
         
@@ -760,25 +837,20 @@ app.get("/", (req, res) => {
                 <div style="font-size: 1em;">
                     📊 \${winner.percentage}% of supply
                 </div>
+                <div style="font-size: 1.8em; color: #ff00ff; margin: 15px 0; text-shadow: 0 0 20px #ff00ff;">
+                    🎭 JOKER AWARDED! 🎭
+                </div>
+                <div style="font-size: 1.2em;">
+                    Total Jokers: \${winner.jokerCount}/3
+                </div>
             \`;
             
-            if (winner.gotJoker) {
+            if (winner.isJokerBonus) {
                 popupHTML += \`
-                    <div style="font-size: 1.8em; color: #ff00ff; margin: 15px 0; text-shadow: 0 0 20px #ff00ff;">
-                        🎭 JOKER AWARDED! 🎭
-                    </div>
-                    <div style="font-size: 1.2em;">
-                        Total Jokers: \${winner.jokerCount}/3
+                    <div style="font-size: 2em; color: #00ffff; margin: 15px 0; text-shadow: 0 0 20px #00ffff;">
+                        🎉🎉 JOKER BONUS! 🎉🎉
                     </div>
                 \`;
-                
-                if (winner.isJokerBonus) {
-                    popupHTML += \`
-                        <div style="font-size: 2em; color: #00ffff; margin: 15px 0; text-shadow: 0 0 20px #00ffff;">
-                            🎉🎉 JOKER BONUS! 🎉🎉
-                        </div>
-                    \`;
-                }
             }
             
             popup.innerHTML = popupHTML;
@@ -793,12 +865,12 @@ app.get("/", (req, res) => {
         createWheelSlices();
         setInterval(updateCountdown, 1000);
         
-        // Auto-refresh data every minute
-        setInterval(() => {
+        // Auto spin on load after 2 seconds
+        setTimeout(() => {
             if (!isSpinning) {
-                location.reload();
+                spinWheel();
             }
-        }, 60000);
+        }, 2000);
     </script>
 </body>
 </html>
@@ -814,7 +886,7 @@ app.post("/spin", (req, res) => {
 // API to get current data
 app.get("/api/data", (req, res) => {
     res.json({
-        holders: cache.holders.length,
+        holders: cache.holders,
         totalTokens: cache.holders.reduce((sum, h) => sum + h.amount, 0),
         spinHistory: cache.spinHistory,
         jokerWallets: Object.fromEntries(cache.jokerWallets),
@@ -826,14 +898,14 @@ app.get("/api/data", (req, res) => {
 const PORT = process.env.PORT || 1000;
 app.listen(PORT, async () => {
     console.log(`🎡 POWERBALL WHEEL Server running on port ${PORT}`);
-    console.log("⏰ Auto-spinning every 15 minutes");
+    console.log("⏰ Auto-spinning every 30 seconds");
     console.log("💰 Weighted chances (0.01% - 5% holders only)");
-    console.log("🎭 Joker system: 10% chance per spin, 3 jokers = bonus!");
+    console.log("🎭 Joker system: EVERY WINNER gets 1 joker, 3 jokers = bonus!");
     console.log("💾 Using in-memory cache (no JSON files)");
     
     await getHolders();
     
-    // Auto-spin every 15 minutes
+    // Auto-spin every 30 seconds
     setInterval(() => {
         spinWheel();
     }, SPIN_INTERVAL);
@@ -841,4 +913,3 @@ app.listen(PORT, async () => {
     // Refresh holders every minute
     setInterval(getHolders, 60000);
 });
-
