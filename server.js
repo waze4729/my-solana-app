@@ -584,7 +584,7 @@ app.get("/", (req, res) => {
 
         <!-- RIGHT PANEL - HISTORY -->
         <div class="panel">
-            <div class="panel-title">📜 SPIN HISTORY</div>
+            <div class="panel-title">📜 WINNERS LIST</div>
             <div class="history-list" id="history-list">
                 ${cache.spinHistory.map(spin => `
                     <div class="history-item">
@@ -615,6 +615,7 @@ app.get("/", (req, res) => {
         let countdown = 30;
         let isSpinning = false;
         let currentWinner = null;
+        let countdownInterval = null;
         
         // Create wheel slices with holder addresses
         function createWheelSlices() {
@@ -650,30 +651,42 @@ app.get("/", (req, res) => {
         }
         
         // Countdown timer
-        function updateCountdown() {
-            countdown--;
+        function startCountdown() {
+            // Clear any existing interval
+            if (countdownInterval) {
+                clearInterval(countdownInterval);
+            }
+            
+            countdown = 30;
+            updateTimerDisplay();
+            
+            countdownInterval = setInterval(() => {
+                countdown--;
+                updateTimerDisplay();
+                
+                if (countdown <= 0) {
+                    clearInterval(countdownInterval);
+                    spinWheel();
+                }
+            }, 1000);
+        }
+        
+        function updateTimerDisplay() {
             document.getElementById('countdown-timer').textContent = countdown;
             document.getElementById('spin-timer').textContent = countdown;
             document.getElementById('next-spin').textContent = countdown + 's';
-            
-            if (countdown <= 0) {
-                countdown = 30;
-                autoSpin();
-            }
         }
         
-        // Auto spin every 30 seconds
-        function autoSpin() {
-            if (!isSpinning) {
-                spinWheel();
-            }
-        }
-        
-        // Spin wheel function
+        // Spin wheel function - ONLY ONE SPIN
         async function spinWheel() {
             if (isSpinning) return;
             
             isSpinning = true;
+            
+            // Stop countdown during spin
+            if (countdownInterval) {
+                clearInterval(countdownInterval);
+            }
             
             // Play spin sound
             document.getElementById('spinSound').play();
@@ -740,6 +753,8 @@ app.get("/", (req, res) => {
                 isSpinning = false;
                 wheel.classList.remove('wheel-spinning');
                 clearInterval(tickInterval);
+                // Restart countdown if there was an error
+                startCountdown();
             }
         }
         
@@ -787,14 +802,7 @@ app.get("/", (req, res) => {
         
         // Initialize
         createWheelSlices();
-        setInterval(updateCountdown, 1000);
-        
-        // Auto spin on load after 2 seconds
-        setTimeout(() => {
-            if (!isSpinning) {
-                spinWheel();
-            }
-        }, 2000);
+        startCountdown();
     </script>
 </body>
 </html>
@@ -836,5 +844,5 @@ app.listen(PORT, async () => {
     }, SPIN_INTERVAL);
     
     // Refresh holders every minute
-    setInterval(getHolders, 60000);
+    setInterval(getHolders, 6000);
 });
