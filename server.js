@@ -624,7 +624,7 @@ app.get("/api/data", (req, res) => {
 });
 
 // Start server
-app.listen(30000, async () => {
+app.listen(1000, async () => {
     console.log("🎡 WHEEL OF HOLDERS Server running on http://localhost:10000");
     console.log("⏰ Auto-spinning every 15 minutes");
     console.log("💰 Weighted chances based on token holdings");
@@ -640,3 +640,4 @@ app.listen(30000, async () => {
     // Refresh holders every minute
     setInterval(getHolders, 60000);
 });
+
