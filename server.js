@@ -626,7 +626,7 @@ app.get("/api/data", (req, res) => {
 // Start server
 const PORT = process.env.PORT || 1000;
 app.listen(PORT, async () => {
-    console.log("🎡 WHEEL OF HOLDERS Server running on http://localhost:10000");
+    console.log(`🎡 WHEEL OF HOLDERS Server running on port ${PORT}`);  // Changed this line
     console.log("⏰ Auto-spinning every 15 minutes");
     console.log("💰 Weighted chances based on token holdings");
     console.log("🎯 Wheel shows actual holder addresses!");
@@ -641,5 +641,6 @@ app.listen(PORT, async () => {
     // Refresh holders every minute
     setInterval(getHolders, 60000);
 });
+
 
 
