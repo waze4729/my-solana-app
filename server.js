@@ -1,701 +1,642 @@
-const { Connection, PublicKey, LAMPORTS_PER_SOL } = require("@solana/web3.js");
+const { Connection, PublicKey } = require("@solana/web3.js");
 const express = require("express");
-const WebSocket = require('ws');
-const http = require('http');
 
 // CONFIG
 const RPC_ENDPOINT = "https://mainnet.helius-rpc.com/?api-key=07ed88b0-3573-4c79-8d62-3a2cbd5c141a";
-const DEFAULT_TOKEN_MINT = "6xhkDDydGj5o1sFXrW7Tt493g3BnaVHnEh2Cs7R6pump";
-const POLL_INTERVAL_MS = 1300;
-const WHEEL_SPIN_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+const TOKEN_MINT = "8KK76tofUfbe7pTh1yRpbQpTkYwXKUjLzEBtAUTwpump";
+const SPIN_INTERVAL = 15 * 60 * 1000; // 15 minutes
 
-let currentTokenMint = DEFAULT_TOKEN_MINT;
-let tokenSupply = 0;
-let allHolders = [];
-let wheelHistory = [];
-let lastSpinTime = null;
-let nextSpinTime = null;
-let isSpinning = false;
-let currentWinner = null;
-let wheelPositions = [];
-let connection = new Connection(RPC_ENDPOINT, { commitment: "confirmed" });
-
+let holders = [];
+let spinHistory = [];
+let connection = new Connection(RPC_ENDPOINT);
 const app = express();
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
-const wsClients = new Set();
 
-// Middleware to parse JSON bodies
-app.use(express.json());
 app.use(express.static('public'));
 
-wss.on('connection', (ws) => {
-    wsClients.add(ws);
-    ws.on('close', () => wsClients.delete(ws));
-    ws.send(JSON.stringify(getCurrentWheelData()));
-});
-
-function broadcastUpdate() {
-    const data = getCurrentWheelData();
-    wsClients.forEach(ws => {
-        if (ws.readyState === 1) ws.send(JSON.stringify(data));
-    });
-}
-
-function getCurrentWheelData() {
-    return {
-        currentTokenMint,
-        tokenSupply,
-        totalHolders: allHolders.length,
-        wheelHistory: wheelHistory.slice(-10), // Last 10 spins
-        lastSpinTime,
-        nextSpinTime,
-        isSpinning,
-        currentWinner,
-        wheelPositions,
-        timeUntilNextSpin: nextSpinTime ? Math.max(0, nextSpinTime - Date.now()) : 0
-    };
-}
-
-async function fetchAllTokenHolders(mintAddress) {
-    const mintPublicKey = new PublicKey(mintAddress);
-    const filters = [
-        { dataSize: 165 },
-        { memcmp: { offset: 0, bytes: mintPublicKey.toBase58() } },
-    ];
-    
+// Get token holders
+async function getHolders() {
     try {
         const accounts = await connection.getParsedProgramAccounts(
             new PublicKey("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"),
-            { filters }
+            {
+                filters: [
+                    { dataSize: 165 },
+                    { memcmp: { offset: 0, bytes: TOKEN_MINT } },
+                ]
+            }
         );
         
-        const holders = accounts
-            .map((acc) => {
-                const parsed = acc.account.data.parsed;
-                return {
-                    address: acc.pubkey.toBase58(),
-                    owner: parsed.info.owner,
-                    amount: Number(parsed.info.tokenAmount.amount) / Math.pow(10, parsed.info.tokenAmount.decimals),
-                };
-            })
-            .filter((a) => a.amount > 0);
+        // First get all holders
+        const allHolders = accounts.map(acc => ({
+            address: acc.pubkey.toBase58(),
+            owner: acc.account.data.parsed.info.owner,
+            amount: Number(acc.account.data.parsed.info.tokenAmount.amount)
+        })).filter(h => h.amount > 0);
         
-        return holders;
-    } catch (e) {
-        console.error("Error fetching token holders:", e.message);
-        return [];
-    }
-}
-
-async function fetchTokenSupply(mintAddress) {
-    try {
-        const mintPublicKey = new PublicKey(mintAddress);
-        const supplyInfo = await connection.getTokenSupply(mintPublicKey);
-        return supplyInfo && supplyInfo.value ? supplyInfo.value.uiAmount || 0 : 0;
-    } catch (e) {
-        console.error("Error fetching token supply:", e.message);
-        return 0;
-    }
-}
-
-function calculateWheelPositions(holders) {
-    if (holders.length === 0) return [];
-    
-    const totalTokens = holders.reduce((sum, holder) => sum + holder.amount, 0);
-    const positions = [];
-    let currentAngle = 0;
-    
-    // Sort holders by amount (descending) for better visual distribution
-    const sortedHolders = [...holders].sort((a, b) => b.amount - a.amount);
-    
-    for (const holder of sortedHolders) {
-        const sliceAngle = (holder.amount / totalTokens) * 360;
-        const percentage = (holder.amount / totalTokens) * 100;
+        // Calculate total supply
+        const totalSupply = allHolders.reduce((sum, h) => sum + h.amount, 0);
         
-        positions.push({
-            holder: holder.owner,
-            tokens: holder.amount,
-            percentage: percentage,
-            startAngle: currentAngle,
-            endAngle: currentAngle + sliceAngle,
-            color: getRandomColor()
+        // Filter out holders with more than 5% of total supply
+        holders = allHolders.filter(holder => {
+            const percentage = (holder.amount / totalSupply) * 100;
+            return percentage <= 5; // Only include holders with 5% or less
         });
         
-        currentAngle += sliceAngle;
+        console.log(`Updated ${holders.length} eligible holders (excluded ${allHolders.length - holders.length} holders with >5% supply)`);
+    } catch (e) {
+        console.error("Error:", e.message);
     }
-    
-    return positions;
 }
 
-function getRandomColor() {
-    const colors = [
-        '#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4', '#FFEAA7',
-        '#DDA0DD', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E9',
-        '#F8C471', '#82E0AA', '#F1948A', '#85C1E9', '#D7BDE2'
-    ];
-    return colors[Math.floor(Math.random() * colors.length)];
-}
-
-function selectWinner(holders) {
+// Spin the wheel
+function spinWheel() {
     if (holders.length === 0) return null;
     
-    const totalTokens = holders.reduce((sum, holder) => sum + holder.amount, 0);
-    let randomPoint = Math.random() * totalTokens;
+    const totalTokens = holders.reduce((sum, h) => sum + h.amount, 0);
+    let random = Math.random() * totalTokens;
     
     for (const holder of holders) {
-        if (randomPoint < holder.amount) {
-            return holder;
+        if (random < holder.amount) {
+            const winner = {
+                address: holder.owner,
+                tokens: holder.amount,
+                time: new Date().toLocaleString(),
+                percentage: (holder.amount / totalTokens * 100).toFixed(4)
+            };
+            spinHistory.unshift(winner);
+            if (spinHistory.length > 50) spinHistory.pop();
+            
+            console.log(`🎉 POWERBALL WINNER: ${winner.address}`);
+            return winner;
         }
-        randomPoint -= holder.amount;
+        random -= holder.amount;
     }
-    
-    // Fallback to last holder if something goes wrong
-    return holders[holders.length - 1];
+    return null;
 }
 
-async function spinWheel() {
-    if (isSpinning || allHolders.length === 0) return;
-    
-    isSpinning = true;
-    broadcastUpdate();
-    
-    console.log(`🎡 Starting Powerball wheel spin for ${allHolders.length} holders...`);
-    
-    // Simulate spinning animation
-    for (let i = 0; i < 3; i++) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        console.log(`🔄 Spinning... ${i + 1}/3`);
-    }
-    
-    const winner = selectWinner(allHolders);
-    currentWinner = winner;
-    
-    const spinResult = {
-        timestamp: new Date().toISOString(),
-        winner: winner.owner,
-        tokens: winner.tokens,
-        percentage: (winner.tokens / tokenSupply) * 100,
-        totalHolders: allHolders.length,
-        tokenMint: currentTokenMint
-    };
-    
-    wheelHistory.push(spinResult);
-    
-    // Keep only last 50 spins
-    if (wheelHistory.length > 50) {
-        wheelHistory = wheelHistory.slice(-50);
-    }
-    
-    isSpinning = false;
-    lastSpinTime = Date.now();
-    nextSpinTime = lastSpinTime + WHEEL_SPIN_INTERVAL_MS;
-    
-    console.log(`🎉 POWERBALL WINNER: ${winner.owner}`);
-    console.log(`🏆 Tokens: ${winner.tokens.toLocaleString()} (${spinResult.percentage.toFixed(4)}% of supply)`);
-    console.log(`📊 Total holders: ${allHolders.length}`);
-    console.log(`⏰ Next spin: ${new Date(nextSpinTime).toLocaleTimeString()}`);
-    
-    broadcastUpdate();
-    return spinResult;
-}
-
-async function updateTokenData() {
-    try {
-        console.log(`🔄 Updating token data for ${currentTokenMint}...`);
-        
-        const [holders, supply] = await Promise.all([
-            fetchAllTokenHolders(currentTokenMint),
-            fetchTokenSupply(currentTokenMint)
-        ]);
-        
-        allHolders = holders;
-        tokenSupply = supply;
-        wheelPositions = calculateWheelPositions(holders);
-        
-        console.log(`✅ Updated: ${holders.length} holders, ${supply.toLocaleString()} total supply`);
-        broadcastUpdate();
-        
-        return true;
-    } catch (error) {
-        console.error('❌ Error updating token data:', error.message);
-        return false;
-    }
-}
-
-// API Routes
+// Serve HTML
 app.get("/", (req, res) => {
-    res.setHeader("Content-Type", "text/html");
-    res.end(`
+    res.send(`
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <title>POWERBALL TOKEN WHEEL</title>
-    <meta charset="utf-8"/>
-    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>POWERBALL WHEEL OF HOLDERS</title>
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap');
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            background: #0a0a0a;
-            color: #00ff41;
-            font-family: 'JetBrains Mono', monospace;
+        body { 
+            font-family: 'Arial Black', Arial, sans-serif; 
+            background: linear-gradient(135deg, #0a0a2a, #1a1a4a);
+            color: white;
             min-height: 100vh;
-            overflow-x: auto;
-            font-size: 12px;
-            line-height: 1.4;
+            overflow-x: hidden;
         }
-        .terminal-container {
-            padding: 20px;
-            max-width: 1400px;
-            margin: 0 auto;
-            background: rgba(0, 0, 0, 0.9);
-            border: 2px solid #00ff41;
-            box-shadow: 0 0 20px #00ff4130;
-        }
-        .game-header {
+        .powerball-header {
             text-align: center;
+            padding: 20px;
+            background: linear-gradient(45deg, #ff0000, #ff6b00);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            font-size: 3em;
+            text-shadow: 0 0 30px rgba(255, 107, 0, 0.5);
+            margin-bottom: 20px;
+        }
+        .stats-row {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 15px;
+            padding: 0 20px;
             margin-bottom: 30px;
-            color: #ffff00;
-            font-size: 24px;
-            font-weight: 700;
-            text-shadow: 0 0 10px #ffff0080;
         }
-        .token-input-section {
-            margin: 20px 0;
+        .stat-card {
+            background: rgba(255, 255, 255, 0.1);
             padding: 20px;
-            border: 2px solid #00ffff;
-            background: rgba(0, 255, 255, 0.05);
+            border-radius: 15px;
             text-align: center;
+            backdrop-filter: blur(10px);
+            border: 2px solid rgba(255, 255, 255, 0.2);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
         }
-        .token-input {
-            width: 500px;
-            max-width: 90%;
-            padding: 10px;
-            background: #000;
-            border: 2px solid #00ff41;
-            color: #00ff41;
-            font-family: 'JetBrains Mono', monospace;
-            margin: 10px;
+        .stat-number {
+            font-size: 2em;
+            font-weight: bold;
+            color: #ffd700;
+            text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
         }
-        .token-button {
-            padding: 10px 20px;
-            background: #00ff41;
-            color: #000;
-            border: none;
-            font-family: 'JetBrains Mono', monospace;
-            font-weight: 700;
-            cursor: pointer;
-            margin: 5px;
+        .stat-label {
+            font-size: 0.9em;
+            color: #ccc;
+            margin-top: 5px;
         }
-        .token-button:hover {
-            background: #ffff00;
-        }
+        
+        /* GIANT WHEEL DESIGN */
         .wheel-container {
             position: relative;
-            width: 400px;
-            height: 400px;
-            margin: 0 auto;
-            border: 4px solid #ff00ff;
-            border-radius: 50%;
-            overflow: hidden;
+            width: 600px;
+            height: 600px;
+            margin: 30px auto;
         }
-        .wheel-slice {
-            position: absolute;
+        .wheel {
             width: 100%;
             height: 100%;
-            clip-path: polygon(50% 50%, 50% 0%, 100% 0%, 100% 100%, 50% 100%);
-            transform-origin: 50% 50%;
+            border-radius: 50%;
+            background: linear-gradient(45deg, #ff0000, #ff6b00, #ffd700, #00ff88, #0066ff);
+            position: relative;
+            overflow: hidden;
+            border: 10px solid #ffd700;
+            box-shadow: 0 0 50px rgba(255, 215, 0, 0.5);
+            transition: transform 4s cubic-bezier(0.2, 0.8, 0.2, 1);
         }
-        .wheel-pointer {
-            position: absolute;
-            top: -20px;
-            left: 50%;
-            transform: translateX(-50%);
-            width: 0;
-            height: 0;
-            border-left: 15px solid transparent;
-            border-right: 15px solid transparent;
-            border-top: 30px solid #ffff00;
-            z-index: 10;
-        }
-        .spinning {
+        .wheel-spinning {
             animation: spin 0.1s linear infinite;
         }
         @keyframes spin {
             from { transform: rotate(0deg); }
             to { transform: rotate(360deg); }
         }
-        .winner-section {
-            margin: 20px 0;
-            padding: 20px;
-            border: 2px solid #ffff00;
-            background: rgba(255, 255, 0, 0.05);
+        .wheel-slice {
+            position: absolute;
+            width: 50%;
+            height: 50%;
+            transform-origin: 100% 100%;
+            left: 0;
+            top: 0;
+            display: flex;
+            align-items: center;
+            justify-content: flex-start;
+            padding-left: 60px;
+            font-size: 12px;
+            font-weight: bold;
+            color: white;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.8);
+            overflow: hidden;
+        }
+        .wheel-slice:nth-child(odd) {
+            background: rgba(255, 0, 0, 0.6);
+        }
+        .wheel-slice:nth-child(even) {
+            background: rgba(255, 107, 0, 0.6);
+        }
+        .wheel-center {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 80px;
+            height: 80px;
+            background: radial-gradient(circle, #ff0000, #8b0000);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            box-shadow: 0 0 30px rgba(255, 0, 0, 0.8);
+            z-index: 10;
+            border: 5px solid #ffd700;
+        }
+        .wheel-pointer {
+            position: absolute;
+            top: -40px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 0;
+            height: 0;
+            border-left: 30px solid transparent;
+            border-right: 30px solid transparent;
+            border-top: 60px solid #ffd700;
+            filter: drop-shadow(0 0 20px gold);
+            z-index: 100;
+        }
+        .wheel-pointer::after {
+            content: '';
+            position: absolute;
+            top: -70px;
+            left: -10px;
+            width: 20px;
+            height: 20px;
+            background: #ff0000;
+            border-radius: 50%;
+        }
+        
+        .controls {
             text-align: center;
-        }
-        .winner-address {
-            font-size: 16px;
-            font-weight: 700;
-            color: #ffff00;
-            word-break: break-all;
-            margin: 10px 0;
-        }
-        .winner-details {
-            font-size: 14px;
-            color: #00ff41;
-        }
-        .history-section {
             margin: 20px 0;
-            padding: 20px;
-            border: 2px solid #00ffff;
-            background: rgba(0, 255, 255, 0.05);
         }
-        .history-title {
-            color: #00ffff;
-            font-weight: 700;
-            margin-bottom: 15px;
+        .spin-button {
+            background: linear-gradient(45deg, #ff0000, #ff6b00);
+            border: none;
+            padding: 20px 60px;
+            font-size: 1.5em;
+            color: white;
+            border-radius: 50px;
+            cursor: pointer;
+            font-weight: bold;
+            box-shadow: 0 0 30px rgba(255, 107, 0, 0.5);
+            transition: all 0.3s;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        .spin-button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 0 40px rgba(255, 107, 0, 0.8);
+        }
+        .spin-button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+        .countdown {
+            font-size: 1.5em;
             text-align: center;
+            color: #ffd700;
+            margin: 15px 0;
+            text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
         }
-        .history-list {
-            max-height: 300px;
+        .holders-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 10px;
+            padding: 20px;
+            max-height: 400px;
             overflow-y: auto;
         }
+        .holder-card {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 12px;
+            border-radius: 8px;
+            border-left: 4px solid #ff6b00;
+        }
+        .holder-address {
+            font-family: monospace;
+            font-size: 0.9em;
+            margin-bottom: 5px;
+        }
+        .holder-tokens {
+            color: #ffd700;
+            font-size: 0.8em;
+        }
+        .history-section {
+            background: rgba(0, 0, 0, 0.5);
+            margin: 20px;
+            padding: 20px;
+            border-radius: 15px;
+            border: 2px solid rgba(255, 255, 255, 0.1);
+        }
+        .history-title {
+            color: #ffd700;
+            text-align: center;
+            margin-bottom: 15px;
+            font-size: 1.5em;
+        }
         .history-item {
-            padding: 10px;
-            margin: 5px 0;
-            background: rgba(0, 255, 255, 0.1);
-            border-left: 3px solid #00ffff;
+            background: rgba(255, 255, 255, 0.05);
+            padding: 12px;
+            margin: 8px 0;
+            border-radius: 8px;
+            border-left: 4px solid #ff0000;
         }
-        .stats-section {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-            margin: 20px 0;
+        a {
+            color: #00ff88;
+            text-decoration: none;
+            transition: color 0.3s;
         }
-        .stat-card {
-            padding: 15px;
-            border: 1px solid #00ff41;
-            background: rgba(0, 255, 65, 0.05);
-            text-align: center;
+        a:hover {
+            color: #ffd700;
+            text-shadow: 0 0 10px rgba(255, 215, 0, 0.5);
         }
-        .stat-value {
-            font-size: 18px;
-            font-weight: 700;
-            color: #ffff00;
-            margin: 5px 0;
-        }
-        .stat-label {
-            font-size: 11px;
-            color: #00ff41;
-            opacity: 0.8;
-        }
-        .connection-status {
+        .winner-popup {
             position: fixed;
-            top: 10px;
-            right: 10px;
-            padding: 5px 10px;
-            background: #000;
-            border: 1px solid #00ff41;
-            font-size: 10px;
-        }
-        .status-connected { color: #00ff41; }
-        .status-disconnected { color: #ff4444; }
-        .countdown {
-            font-size: 20px;
-            font-weight: 700;
-            color: #ff00ff;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: linear-gradient(45deg, #ff0000, #ff6b00);
+            padding: 40px;
+            border-radius: 25px;
             text-align: center;
-            margin: 20px 0;
+            z-index: 1000;
+            box-shadow: 0 0 80px rgba(255, 0, 0, 0.9);
+            animation: popup 0.5s ease-out;
+            border: 5px solid #ffd700;
         }
-        @media (max-width: 768px) {
-            .wheel-container {
-                width: 300px;
-                height: 300px;
-            }
-            .token-input {
-                width: 90%;
-            }
+        @keyframes popup {
+            from { transform: translate(-50%, -50%) scale(0); opacity: 0; }
+            to { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+        }
+        .current-winner {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0, 0, 0, 0.8);
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+            z-index: 50;
+            border: 3px solid #ffd700;
+            min-width: 200px;
+        }
+        .winner-address {
+            font-family: monospace;
+            font-size: 1.1em;
+            color: #ffd700;
+            margin-bottom: 10px;
+            word-break: break-all;
+        }
+        .winner-stats {
+            font-size: 0.9em;
+            color: #00ff88;
         }
     </style>
 </head>
 <body>
-    <div class="connection-status">
-        <span id="connection-indicator">●</span> 
-        <span id="connection-text">CONNECTING...</span>
-    </div>
+    <h1 class="powerball-header">🎡POWERBALL WHEEL OF HOLDERS 🎡</h1>
     
-    <div class="terminal-container">
-        <div class="game-header">
-            🎡 POWERBALL TOKEN WHEEL 🎡
+    <div class="stats-row">
+        <div class="stat-card">
+            <div class="stat-number" id="total-holders">${holders.length}</div>
+            <div class="stat-label">TOTAL HOLDERS</div>
         </div>
-        
-        <div class="token-input-section">
-            <div style="margin-bottom: 15px; color: #00ffff;">
-                Enter Token Mint Address to Start the Game
-            </div>
-            <input type="text" class="token-input" id="token-input" placeholder="Enter token mint address..." value="${currentTokenMint}">
-            <br>
-            <button class="token-button" onclick="updateToken()">UPDATE TOKEN</button>
-            <button class="token-button" onclick="refreshData()">REFRESH DATA</button>
+        <div class="stat-card">
+            <div class="stat-number" id="total-supply">${holders.reduce((sum, h) => sum + h.amount, 0).toLocaleString()}</div>
+            <div class="stat-label">TOTAL TOKENS</div>
         </div>
-        
-        <div class="stats-section">
-            <div class="stat-card">
-                <div class="stat-label">CURRENT TOKEN</div>
-                <div class="stat-value" id="current-token">${currentTokenMint}</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">TOTAL HOLDERS</div>
-                <div class="stat-value" id="total-holders">0</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">TOKEN SUPPLY</div>
-                <div class="stat-value" id="token-supply">0</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-label">NEXT SPIN IN</div>
-                <div class="stat-value" id="next-spin">--:--</div>
-            </div>
-        </div>
-        
-        <div class="countdown" id="countdown">
-            Next spin: Calculating...
-        </div>
-        
-        <div class="wheel-container" id="wheel-container">
-            <div class="wheel-pointer"></div>
-            <div id="wheel-slices"></div>
-        </div>
-        
-        <div class="winner-section" id="winner-section" style="display: none;">
-            <div style="font-size: 20px; color: #ffff00; margin-bottom: 15px;">🎉 CURRENT WINNER 🎉</div>
-            <div class="winner-address" id="winner-address"></div>
-            <div class="winner-details" id="winner-details"></div>
-        </div>
-        
-        <div class="history-section">
-            <div class="history-title">📋 SPIN HISTORY 📋</div>
-            <div class="history-list" id="history-list"></div>
+        <div class="stat-card">
+            <div class="stat-number" id="next-spin">15:00</div>
+            <div class="stat-label">NEXT SPIN</div>
         </div>
     </div>
 
+    <div class="wheel-container">
+        <div class="wheel-pointer"></div>
+        <div class="wheel" id="wheel">
+            <div class="current-winner" id="current-winner">
+                <div>SPIN THE WHEEL!</div>
+            </div>
+            <div class="wheel-center"></div>
+        </div>
+    </div>
+
+    <div class="countdown" id="countdown">
+        Next Spin: <span id="countdown-timer">15:00</span>
+    </div>
+
+    <div class="controls">
+        <button class="spin-button" onclick="spinWheel()" id="spin-btn">🎡 SPIN THE WHEEL 🎡</button>
+    </div>
+
+    <div class="stats-row">
+        <div class="stat-card">
+            <div class="stat-number" id="last-winner">-</div>
+            <div class="stat-label">LAST WINNER</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number" id="winner-tokens">-</div>
+            <div class="stat-label">WINNER TOKENS</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number" id="spin-count">${spinHistory.length}</div>
+            <div class="stat-label">TOTAL SPINS</div>
+        </div>
+    </div>
+
+    <div class="holders-grid" id="holders-container">
+        ${holders.map(holder => `
+            <div class="holder-card">
+                <div class="holder-address">
+                    <a href="https://solscan.io/account/${holder.owner}" target="_blank">
+                        ${holder.owner.slice(0, 12)}...${holder.owner.slice(-12)}
+                    </a>
+                </div>
+                <div class="holder-tokens">${holder.amount.toLocaleString()} tokens</div>
+            </div>
+        `).join('')}
+    </div>
+
+    <div class="history-section">
+        <div class="history-title">🏆 SPIN HISTORY</div>
+        <div id="history-list">
+            ${spinHistory.map(spin => `
+                <div class="history-item">
+                    <strong>${spin.time}</strong> - 
+                    <a href="https://solscan.io/account/${spin.address}" target="_blank">
+                        ${spin.address.slice(0, 12)}...${spin.address.slice(-12)}
+                    </a> - 
+                    ${spin.tokens.toLocaleString()} tokens (${spin.percentage}%)
+                </div>
+            `).join('')}
+        </div>
+    </div>
+
+    <audio id="spinSound" src="https://assets.mixkit.co/sfx/preview/mixkit-slot-machine-wheel-1931.mp3"></audio>
+    <audio id="winSound" src="https://assets.mixkit.co/sfx/preview/mixkit-winning-chimes-2015.mp3"></audio>
+    <audio id="tickSound" src="https://assets.mixkit.co/sfx/preview/mixkit-arcade-game-jump-coin-216.mp3"></audio>
+
     <script>
-        let ws;
-        let countdownInterval;
+        let countdown = 15 * 60;
+        let isSpinning = false;
+        let currentWinner = null;
         
-        function connectWebSocket() {
-            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            ws = new WebSocket(\`\${protocol}//\${window.location.host}\`);
+        // Create wheel slices with holder addresses
+        function createWheelSlices() {
+            const wheel = document.getElementById('wheel');
+            // Clear existing slices except center and current winner
+            const currentWinnerDiv = document.getElementById('current-winner');
+            const wheelCenter = document.querySelector('.wheel-center');
+            wheel.innerHTML = '';
+            wheel.appendChild(currentWinnerDiv);
+            wheel.appendChild(wheelCenter);
             
-            ws.onopen = () => {
-                document.getElementById('connection-indicator').className = 'status-connected';
-                document.getElementById('connection-text').textContent = 'CONNECTED';
-            };
+            const sliceCount = Math.min(holders.length, 36); // Max 36 slices for readability
+            const angle = 360 / sliceCount;
             
-            ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                updateWheel(data);
-            };
+            // Get top holders for the wheel (or all if less than 36)
+            const wheelHolders = [...holders]
+                .sort((a, b) => b.amount - a.amount)
+                .slice(0, sliceCount);
             
-            ws.onclose = () => {
-                document.getElementById('connection-indicator').className = 'status-disconnected';
-                document.getElementById('connection-text').textContent = 'RECONNECTING...';
-                setTimeout(connectWebSocket, 3000);
-            };
-        }
-        
-        function updateWheel(data) {
-            document.getElementById('current-token').textContent = data.currentTokenMint;
-            document.getElementById('total-holders').textContent = data.totalHolders.toLocaleString();
-            document.getElementById('token-supply').textContent = data.tokenSupply.toLocaleString();
-            
-            // Update wheel visualization
-            const wheelSlices = document.getElementById('wheel-slices');
-            wheelSlices.innerHTML = '';
-            wheelSlices.className = data.isSpinning ? 'wheel-slices spinning' : 'wheel-slices';
-            
-            data.wheelPositions.forEach((slice, index) => {
-                const sliceEl = document.createElement('div');
-                sliceEl.className = 'wheel-slice';
-                sliceEl.style.backgroundColor = slice.color;
-                sliceEl.style.transform = \`rotate(\${slice.startAngle}deg)\`;
-                sliceEl.title = \`\${slice.holder.substring(0, 8)}... - \${slice.tokens.toLocaleString()} tokens (\${slice.percentage.toFixed(2)}%)\`;
-                wheelSlices.appendChild(sliceEl);
+            wheelHolders.forEach((holder, index) => {
+                const slice = document.createElement('div');
+                slice.className = 'wheel-slice';
+                slice.style.transform = \`rotate(\${index * angle}deg)\`;
+                
+                // Shorten address for display
+                const shortAddress = \`\${holder.owner.slice(0, 6)}...\${holder.owner.slice(-4)}\`;
+                slice.innerHTML = \`
+                    <div style="transform: rotate(\${90 - angle/2}deg); transform-origin: left center;">
+                        \${shortAddress}<br>
+                        <small>\${(holder.amount/1000).toFixed(0)}K</small>
+                    </div>
+                \`;
+                
+                wheel.appendChild(slice);
             });
             
-            // Update winner section
-            if (data.currentWinner) {
-                document.getElementById('winner-section').style.display = 'block';
-                document.getElementById('winner-address').innerHTML = \`
-                    <a href="https://solscan.io/account/\${data.currentWinner.owner}" target="_blank" style="color: #ffff00;">
-                        \${data.currentWinner.owner}
+            console.log(\`Created wheel with \${wheelHolders.length} holders\`);
+        }
+        
+        // Countdown timer
+        function updateCountdown() {
+            countdown--;
+            if (countdown <= 0) {
+                countdown = 15 * 60;
+                autoSpin();
+            }
+            const mins = Math.floor(countdown / 60);
+            const secs = countdown % 60;
+            const timerText = \`\${mins}:\${secs.toString().padStart(2, '0')}\`;
+            document.getElementById('countdown-timer').textContent = timerText;
+            document.getElementById('next-spin').textContent = timerText;
+        }
+        
+        // Auto spin every 15 minutes
+        function autoSpin() {
+            if (!isSpinning) {
+                spinWheel();
+            }
+        }
+        
+        // Spin wheel function
+        async function spinWheel() {
+            if (isSpinning) return;
+            
+            isSpinning = true;
+            document.getElementById('spin-btn').disabled = true;
+            
+            // Play spin sound
+            document.getElementById('spinSound').play();
+            
+            const wheel = document.getElementById('wheel');
+            wheel.classList.add('wheel-spinning');
+            
+            // Update current winner display to show spinning
+            document.getElementById('current-winner').innerHTML = '<div>SPINNING...</div>';
+            
+            // Play tick sounds during spin
+            const tickInterval = setInterval(() => {
+                document.getElementById('tickSound').play();
+            }, 150);
+            
+            try {
+                const response = await fetch('/spin', { method: 'POST' });
+                const winner = await response.json();
+                
+                setTimeout(() => {
+                    clearInterval(tickInterval);
+                    wheel.classList.remove('wheel-spinning');
+                    
+                    if (winner && winner.address) {
+                        // Play win sound
+                        document.getElementById('winSound').play();
+                        
+                        // Update current winner display
+                        document.getElementById('current-winner').innerHTML = \`
+                            <div class="winner-address">
+                                \${winner.address.slice(0, 8)}...\${winner.address.slice(-8)}
+                            </div>
+                            <div class="winner-stats">
+                                \${winner.tokens.toLocaleString()} tokens<br>
+                                \${winner.percentage}%
+                            </div>
+                        \`;
+                        
+                        // Show winner popup
+                        showWinnerPopup(winner);
+                        
+                        // Update stats
+                        document.getElementById('last-winner').textContent = 
+                            winner.address.slice(0, 6) + '...' + winner.address.slice(-6);
+                        document.getElementById('winner-tokens').textContent = 
+                            winner.tokens.toLocaleString();
+                        document.getElementById('spin-count').textContent = 
+                            parseInt(document.getElementById('spin-count').textContent) + 1;
+                    }
+                    
+                    isSpinning = false;
+                    document.getElementById('spin-btn').disabled = false;
+                    
+                    // Reload page after showing winner to update history
+                    setTimeout(() => location.reload(), 5000);
+                    
+                }, 4000);
+                
+            } catch (error) {
+                console.error('Spin error:', error);
+                isSpinning = false;
+                document.getElementById('spin-btn').disabled = false;
+                wheel.classList.remove('wheel-spinning');
+                clearInterval(tickInterval);
+            }
+        }
+        
+        // Show winner popup
+        function showWinnerPopup(winner) {
+            const popup = document.createElement('div');
+            popup.className = 'winner-popup';
+            popup.innerHTML = \`
+                <h2 style="font-size: 2.5em; margin-bottom: 20px;">🎉 WHEEL WINNER! 🎉</h2>
+                <div style="font-size: 1.3em; margin: 15px 0; font-family: monospace;">
+                    <a href="https://solscan.io/account/\${winner.address}" target="_blank" style="color: white;">
+                        \${winner.address}
                     </a>
-                \`;
-                document.getElementById('winner-details').innerHTML = \`
-                    \${data.currentWinner.tokens.toLocaleString()} tokens | \${((data.currentWinner.tokens / data.tokenSupply) * 100).toFixed(4)}% of supply
-                \`;
-            }
-            
-            // Update history
-            const historyList = document.getElementById('history-list');
-            historyList.innerHTML = data.wheelHistory.reverse().map(spin => \`
-                <div class="history-item">
-                    <div style="font-weight: 700;">
-                        <a href="https://solscan.io/account/\${spin.winner}" target="_blank" style="color: #00ffff;">
-                            \${spin.winner.substring(0, 8)}...\${spin.winner.substring(spin.winner.length - 8)}
-                        </a>
-                    </div>
-                    <div style="font-size: 11px; color: #ccc;">
-                        \${new Date(spin.timestamp).toLocaleString()} | \${spin.tokens.toLocaleString()} tokens (\${spin.percentage.toFixed(4)}%) | \${spin.totalHolders} holders
-                    </div>
                 </div>
-            \`).join('');
+                <div style="font-size: 1.8em; color: #ffd700; margin: 15px 0;">
+                    🪙 \${winner.tokens.toLocaleString()} TOKENS
+                </div>
+                <div style="font-size: 1.2em;">
+                    📊 \${winner.percentage}% of total supply
+                </div>
+                <div style="margin-top: 20px; font-size: 1em; opacity: 0.9;">
+                    ⚖️ Weighted by token holdings
+                </div>
+            \`;
+            document.body.appendChild(popup);
             
-            // Update countdown
-            updateCountdown(data.timeUntilNextSpin);
+            setTimeout(() => {
+                document.body.removeChild(popup);
+            }, 4500);
         }
         
-        function updateCountdown(timeUntilNextSpin) {
-            if (countdownInterval) clearInterval(countdownInterval);
-            
-            function update() {
-                const timeLeft = Math.max(0, timeUntilNextSpin);
-                const minutes = Math.floor(timeLeft / 60000);
-                const seconds = Math.floor((timeLeft % 60000) / 1000);
-                
-                document.getElementById('countdown').innerHTML = \`
-                    🎡 Next Powerball Spin: \${minutes.toString().padStart(2, '0')}:\${seconds.toString().padStart(2, '0')}
-                \`;
-                
-                document.getElementById('next-spin').textContent = \`\${minutes}m \${seconds}s\`;
-                
-                timeUntilNextSpin -= 1000;
+        // Initialize
+        createWheelSlices();
+        setInterval(updateCountdown, 1000);
+        
+        // Auto-refresh data every minute
+        setInterval(() => {
+            if (!isSpinning) {
+                location.reload();
             }
-            
-            update();
-            countdownInterval = setInterval(update, 1000);
-        }
-        
-        async function updateToken() {
-            const tokenInput = document.getElementById('token-input').value.trim();
-            if (!tokenInput) return;
-            
-            try {
-                const response = await fetch('/api/update-token', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ tokenMint: tokenInput })
-                });
-                
-                const result = await response.json();
-                if (result.success) {
-                    alert('Token updated successfully!');
-                } else {
-                    alert('Error: ' + result.error);
-                }
-            } catch (error) {
-                alert('Error updating token: ' + error.message);
-            }
-        }
-        
-        async function refreshData() {
-            try {
-                await fetch('/api/refresh-data', { method: 'POST' });
-                alert('Data refresh initiated!');
-            } catch (error) {
-                alert('Error refreshing data: ' + error.message);
-            }
-        }
-        
-        connectWebSocket();
+        }, 60000);
     </script>
 </body>
 </html>
     `);
 });
 
-app.post("/api/update-token", async (req, res) => {
-    try {
-        const { tokenMint } = req.body;
-        
-        if (!tokenMint) {
-            return res.json({ success: false, error: "Token mint is required" });
-        }
-        
-        // Validate the token mint format
-        try {
-            new PublicKey(tokenMint);
-        } catch (e) {
-            return res.json({ success: false, error: "Invalid token mint address" });
-        }
-        
-        currentTokenMint = tokenMint;
-        connection = new Connection(RPC_ENDPOINT, { commitment: "confirmed" });
-        
-        // Reset game state
-        allHolders = [];
-        wheelHistory = [];
-        currentWinner = null;
-        wheelPositions = [];
-        lastSpinTime = null;
-        nextSpinTime = null;
-        
-        // Update token data
-        await updateTokenData();
-        
-        res.json({ success: true, message: "Token updated successfully" });
-    } catch (error) {
-        res.json({ success: false, error: error.message });
-    }
+// API to spin wheel
+app.post("/spin", (req, res) => {
+    const winner = spinWheel();
+    res.json(winner || { error: "No holders available" });
 });
 
-app.post("/api/refresh-data", async (req, res) => {
-    try {
-        await updateTokenData();
-        res.json({ success: true, message: "Data refreshed successfully" });
-    } catch (error) {
-        res.json({ success: false, error: error.message });
-    }
-});
-
-app.get("/api/status", (req, res) => {
-    res.json(getCurrentWheelData());
-});
-
-const PORT = process.env.PORT || 1000;
-server.listen(PORT, () => {
-    console.log(`🎡 Powerball Wheel Server running on http://localhost:${PORT}`);
-    console.log(`⏰ Wheel spins every 15 minutes`);
-    console.log(`💰 Token holders have winning chances proportional to their holdings`);
-    
-    // Initialize with default token
-    updateTokenData().then(() => {
-        // Schedule first spin
-        nextSpinTime = Date.now() + WHEEL_SPIN_INTERVAL_MS;
-        console.log(`⏰ First spin scheduled for: ${new Date(nextSpinTime).toLocaleTimeString()}`);
+// API to get current data
+app.get("/api/data", (req, res) => {
+    res.json({
+        holders: holders.length,
+        totalTokens: holders.reduce((sum, h) => sum + h.amount, 0),
+        spinHistory: spinHistory
     });
 });
 
-// Main game loop
-async function gameLoop() {
-    while (true) {
-        try {
-            // Update token data every minute
-            await updateTokenData();
-            
-            // Check if it's time to spin the wheel
-            const now = Date.now();
-            if (nextSpinTime && now >= nextSpinTime && !isSpinning && allHolders.length > 0) {
-                await spinWheel();
-            }
-            
-            await new Promise(resolve => setTimeout(resolve, 60000)); // Check every minute
-        } catch (error) {
-            console.error('Error in game loop:', error);
-            await new Promise(resolve => setTimeout(resolve, 30000)); // Wait 30 seconds on error
-        }
-    }
-}
-
-// Start the game loop
-gameLoop().catch(console.error);
+// Start server
+app.listen(30000, async () => {
+    console.log("🎡 WHEEL OF HOLDERS Server running on http://localhost:10000");
+    console.log("⏰ Auto-spinning every 15 minutes");
+    console.log("💰 Weighted chances based on token holdings");
+    console.log("🎯 Wheel shows actual holder addresses!");
+    
+    await getHolders();
+    
+    // Auto-spin every 15 minutes
+    setInterval(() => {
+        spinWheel();
+    }, SPIN_INTERVAL);
+    
+    // Refresh holders every minute
+    setInterval(getHolders, 60000);
+});
