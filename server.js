@@ -139,7 +139,7 @@ app.get("/", (req, res) => {
             background: linear-gradient(135deg, #0a0a2a, #1a1a4a);
             color: white;
             min-height: 100vh;
-            overflow: hidden;
+
         }
         .powerball-header {
             text-align: center;
@@ -606,7 +606,7 @@ app.get("/", (req, res) => {
                         <a href="https://solscan.io/account/${spin.address}" target="_blank">
                             ${spin.address.slice(0, 8)}...${spin.address.slice(-8)}
                         </a><br>
-                        ${spin.tokens.toLocaleString()} tokens (${spin.percentage}%)
+       ${spin.tokens.toLocaleString()} tokens
                         ${spin.gotJoker ? `<br><small class="joker-indicator">+1 Joker (${spin.jokerCount}/3)</small>` : ''}
                     </div>
                 `).join('')}
@@ -674,3 +674,4 @@ app.listen(PORT, async () => {
     // Refresh holders every minute
     setInterval(getHolders, 60000);
 });
+
