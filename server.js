@@ -55,21 +55,13 @@ async function getHolders() {
     }
 }
 
-// Spin the wheel with joker logic - EVERY WINNER GETS A JOKER
+// Spin the wheel with COMPLETELY RANDOM selection and JOKER RESPIN
 function spinWheel() {
     if (cache.holders.length === 0) return null;
     
-    const totalTokens = cache.holders.reduce((sum, h) => sum + h.amount, 0);
-    let random = Math.random() * totalTokens;
-    let winnerHolder = null;
-    
-    for (const holder of cache.holders) {
-        if (random < holder.amount) {
-            winnerHolder = holder;
-            break;
-        }
-        random -= holder.amount;
-    }
+    // COMPLETELY RANDOM SELECTION - not weighted by token amount
+    const randomIndex = Math.floor(Math.random() * cache.holders.length);
+    const winnerHolder = cache.holders[randomIndex];
     
     if (!winnerHolder) return null;
     
@@ -95,7 +87,7 @@ function spinWheel() {
         address: winnerHolder.owner,
         tokens: winnerHolder.amount,
         time: new Date().toLocaleString(),
-        percentage: (winnerHolder.amount / totalTokens * 100).toFixed(4),
+        percentage: (winnerHolder.amount / cache.holders.reduce((sum, h) => sum + h.amount, 0) * 100).toFixed(4),
         gotJoker: getsJoker,
         jokerCount: jokerCount,
         isJokerBonus: jokerCount === 3,
@@ -637,9 +629,8 @@ app.get("/", (req, res) => {
             const sliceCount = Math.min(${cache.holders.length}, 24);
             const angle = 360 / sliceCount;
             
-            // Get top holders for the wheel
-            const wheelHolders = [...${JSON.stringify(cache.holders)}]
-                .sort((a, b) => b.amount - a.amount)
+            // Get all holders for the wheel (random selection, no weighting)
+            const wheelHolders = ${JSON.stringify(cache.holders)}
                 .slice(0, sliceCount);
             
             wheelHolders.forEach((holder, index) => {
@@ -734,8 +725,10 @@ app.get("/", (req, res) => {
                         // Show winner popup
                         showWinnerPopup(winner);
                         
-                        // Update the entire layout without page refresh
-                        setTimeout(updateLayout, 2000);
+                        // AUTO RELOAD PAGE after spin completion to get fresh data
+                        setTimeout(() => {
+                            location.reload();
+                        }, 3000);
                     }
                     
                     isSpinning = false;
@@ -747,77 +740,6 @@ app.get("/", (req, res) => {
                 isSpinning = false;
                 wheel.classList.remove('wheel-spinning');
                 clearInterval(tickInterval);
-            }
-        }
-        
-        // Update layout without page refresh
-        async function updateLayout() {
-            try {
-                const response = await fetch('/api/data');
-                const data = await response.json();
-                
-                // Update holders list
-                const holdersContainer = document.getElementById('holders-container');
-                holdersContainer.innerHTML = data.holders.map(holder => {
-                    const jokerCount = data.jokerWallets[holder.owner] || 0;
-                    return \`
-                    <div class="holder-card">
-                        <div class="holder-address">
-                            <a href="https://solscan.io/account/\${holder.owner}" target="_blank">
-                                \${holder.owner.slice(0, 8)}...\${holder.owner.slice(-8)}
-                            </a>
-                            \${jokerCount > 0 ? \`<span class="joker-indicator">🎭×\${jokerCount}</span>\` : ''}
-                        </div>
-                        <div class="holder-tokens">\${holder.amount.toLocaleString()} tokens</div>
-                    </div>
-                    \`;
-                }).join('');
-                
-                // Update history list
-                const historyContainer = document.getElementById('history-list');
-                historyContainer.innerHTML = data.spinHistory.map(spin => \`
-                    <div class="history-item">
-                        \${spin.gotJoker ? 
-                            (spin.jokerCount >= 3 ? 
-                                '<span class="joker-bonus-badge">3</span>' : 
-                                '<span class="joker-badge">🎭</span>'
-                            ) : ''
-                        }
-                        <strong>\${spin.time.split(' ')[1]}</strong><br>
-                        <a href="https://solscan.io/account/\${spin.address}" target="_blank">
-                            \${spin.address.slice(0, 8)}...\${spin.address.slice(-8)}
-                        </a><br>
-                        \${spin.tokens.toLocaleString()} tokens (\${spin.percentage}%)
-                        \${spin.gotJoker ? \`<br><small class="joker-indicator">+1 Joker (\${spin.jokerCount}/3)</small>\` : ''}
-                    </div>
-                \`).join('');
-                
-                // Update joker wallets row
-                const jokerWalletsContainer = document.getElementById('joker-wallets-container');
-                const jokerWallets = Object.entries(data.jokerWallets);
-                jokerWalletsContainer.innerHTML = jokerWallets.map(([wallet, count]) => \`
-                    <div class="joker-wallet-item">
-                        <a href="https://solscan.io/account/\${wallet}" target="_blank">
-                            \${wallet.slice(0, 6)}...\${wallet.slice(-4)}
-                        </a>
-                        <div class="joker-wallet-jokers">\${count}</div>
-                    </div>
-                \`).join('');
-                
-                // Update stats
-                document.getElementById('total-holders').textContent = data.holders.length;
-                document.getElementById('total-supply').textContent = data.totalTokens.toLocaleString();
-                document.getElementById('joker-count').textContent = jokerWallets.length;
-                
-                // Update last winner if there are spins
-                if (data.spinHistory.length > 0) {
-                    const lastWinner = data.spinHistory[0].address;
-                    document.getElementById('last-winner').textContent = 
-                        lastWinner.slice(0, 4) + '...' + lastWinner.slice(-4);
-                }
-                
-            } catch (error) {
-                console.error('Layout update error:', error);
             }
         }
         
@@ -857,7 +779,9 @@ app.get("/", (req, res) => {
             document.body.appendChild(popup);
             
             setTimeout(() => {
-                document.body.removeChild(popup);
+                if (document.body.contains(popup)) {
+                    document.body.removeChild(popup);
+                }
             }, 4500);
         }
         
@@ -899,8 +823,9 @@ const PORT = process.env.PORT || 1000;
 app.listen(PORT, async () => {
     console.log(`🎡 POWERBALL WHEEL Server running on port ${PORT}`);
     console.log("⏰ Auto-spinning every 30 seconds");
-    console.log("💰 Weighted chances (0.01% - 5% holders only)");
+    console.log("🎲 COMPLETELY RANDOM selection (0.01% - 5% holders only)");
     console.log("🎭 Joker system: EVERY WINNER gets 1 joker, 3 jokers = bonus!");
+    console.log("🔄 Auto page reload after each spin");
     console.log("💾 Using in-memory cache (no JSON files)");
     
     await getHolders();
