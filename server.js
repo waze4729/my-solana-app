@@ -644,4 +644,12 @@ app.listen(PORT, '0.0.0.0', async () => {
 });
 
 
+// Debug route to check port and environment
+app.get("/debug", (req, res) => {
+    res.json({
+        port: process.env.PORT,
+        node_env: process.env.NODE_ENV,
+        message: "Powerball Wheel Debug Info"
+    });
+});
 
